@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root { color-scheme: dark; }
+  html, body, #root { min-height: 100%; }
+  body {
+    @apply bg-ink-950 text-neutral-200 antialiased;
+    background-image:
+      radial-gradient(1200px 600px at 110% -10%, rgba(245, 192, 0, 0.07), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(245, 192, 0, 0.04), transparent 60%);
+    background-attachment: fixed;
+  }
+  ::selection { @apply bg-brand-500/30 text-white; }
+  * { scrollbar-width: thin; scrollbar-color: #2e2e2e transparent; }
+  :focus-visible { @apply outline-none ring-2 ring-brand-500/70 ring-offset-2 ring-offset-ink-950; }
+  input[type="date"]::-webkit-calendar-picker-indicator,
+  input[type="datetime-local"]::-webkit-calendar-picker-indicator { filter: invert(0.8); cursor: pointer; }
+  select option { background: #111111; }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-white/[0.06] bg-ink-850/80 shadow-card backdrop-blur-sm;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold
+      transition-all duration-200 active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100;
+  }
+  .btn-primary {
+    @apply btn bg-brand-500 text-black shadow-[0_8px_24px_-8px_rgba(245,192,0,.6)] hover:bg-brand-400 hover:shadow-[0_10px_30px_-8px_rgba(245,192,0,.75)];
+  }
+  .btn-ghost {
+    @apply btn border border-white/10 bg-white/[0.03] text-neutral-200 hover:border-white/20 hover:bg-white/[0.07];
+  }
+  .btn-danger {
+    @apply btn border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20;
+  }
+  .input {
+    @apply w-full rounded-xl border border-white/10 bg-ink-900 px-3.5 py-2.5 text-sm text-neutral-100 placeholder:text-neutral-500
+      outline-none transition-colors focus:border-brand-500/70 focus:ring-4 focus:ring-brand-500/10;
+  }
+  .label { @apply mb-1.5 block text-xs font-semibold uppercase tracking-wider text-neutral-400; }
+  .chip { @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold; }
+  .skeleton {
+    @apply relative overflow-hidden rounded-md bg-white/[0.05];
+  }
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+    animation: shimmer 1.4s infinite;
+  }
+  .table-head { @apply px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-neutral-500; }
+  .table-cell { @apply px-4 py-3; }
+}
+
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

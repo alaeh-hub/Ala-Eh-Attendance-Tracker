@@ -1,0 +1,35 @@
+# Secrets / local config
+.env
+.env.*
+!.env.example
+
+# Runtime data (face embeddings, photos, DB, logs) - never commit
+backend/instance/
+backend/logs/
+*.db
+*.sqlite3
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Root-level stray lockfile (real one lives in frontend/)
+/package-lock.json
+
+# Editors / OS
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

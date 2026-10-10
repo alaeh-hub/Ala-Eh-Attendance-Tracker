@@ -1,0 +1,46 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: attendance
+      POSTGRES_DB: attendance
+    env_file: backend/.env          # supplies POSTGRES_PASSWORD
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U attendance -d attendance"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: backend/.env
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend/models:/app/models:ro   # YuNet/SFace/MiniFASNet ONNX files
+      - backend-logs:/app/logs
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    env_file: frontend/.env
+    volumes:                        # live-edit: changes under src/ show up without a rebuild
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
+
+volumes:
+  pgdata:
+  backend-logs:
