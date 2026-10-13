@@ -20,9 +20,12 @@ def _laplacian_variance(gray: np.ndarray) -> float:
     return cv2.Laplacian(gray, cv2.CV_64F).var()
 
 
-def assess_quality(image_bgr: np.ndarray, face_box) -> dict:
+def assess_quality(image_bgr: np.ndarray, face_box, min_blur: float | None = None) -> dict:
     """
     face_box: (top, right, bottom, left) as returned by detector.py
+    min_blur: sharpness floor; defaults to BLUR_THRESHOLD. Enrollment passes
+    a stricter one, since a blurry saved sample hurts every later scan while
+    the person enrolling can simply hold still and retry.
     Returns {"ok": bool, "reason": str|None, "score": float}
     score is a rough 0-1 composite used for ranking enrollment samples.
     """
@@ -40,7 +43,7 @@ def assess_quality(image_bgr: np.ndarray, face_box) -> dict:
     gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
 
     blur_score = _laplacian_variance(gray)
-    if blur_score < BLUR_THRESHOLD:
+    if blur_score < (BLUR_THRESHOLD if min_blur is None else min_blur):
         return {"ok": False, "reason": "Image is too blurry — hold still.", "score": 0.0}
 
     brightness = float(np.mean(gray))

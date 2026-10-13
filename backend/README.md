@@ -43,7 +43,8 @@ Run the tests: `python -m unittest tests.test_recognition_routes`
 | `MIN_ENROLLMENT_SAMPLES` | `5` | poses needed to finish enrolling |
 | `LIVENESS_REQUIRED` | `true` | require a blink |
 | `ALLOW_PUBLIC_REGISTRATION` | `false` | self sign-up (off for companies) |
-| `FACE_MATCH_THRESHOLD` etc. | engine default | only override after testing |
+| `ENROLL_BLUR_THRESHOLD` | `45` | sharpness floor for enrollment samples (kiosk uses a looser one) |
+| `FACE_MATCH_THRESHOLD` etc. | engine default (SFace `0.50`) | only override after testing |
 
 ## Main endpoints
 

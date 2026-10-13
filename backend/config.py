@@ -60,6 +60,12 @@ class Config:
     # brightness-shifted crops, up to 6 variants; dlib: random re-crops).
     # Enrollment is one-off, so the extra cost is fine.
     ENROLL_NUM_JITTERS = int(os.environ.get("ENROLL_NUM_JITTERS", 5))
+    # Sharpness floor (Laplacian variance of the face crop) for enrollment
+    # samples only; the kiosk keeps the looser quality.BLUR_THRESHOLD so a
+    # scan isn't refused while autofocus catches up. 60 over-rejected
+    # ordinary webcams, so start here and raise it if enrolled samples
+    # still look soft.
+    ENROLL_BLUR_THRESHOLD = float(os.environ.get("ENROLL_BLUR_THRESHOLD", 45))
     # Minimum samples required to finish enrolling a face.
     MIN_ENROLLMENT_SAMPLES = int(os.environ.get("MIN_ENROLLMENT_SAMPLES", 5))
     MAX_ENROLLMENT_SAMPLES = int(os.environ.get("MAX_ENROLLMENT_SAMPLES", 12))

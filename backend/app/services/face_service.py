@@ -219,7 +219,7 @@ def enroll_sample(user_id: str, image_bytes: bytes, pose_label: str = None,
     if err:
         raise AppError(err, 422)
 
-    quality = assess_quality(image, face.box)
+    quality = assess_quality(image, face.box, min_blur=cfg.get("ENROLL_BLUR_THRESHOLD"))
     if not quality["ok"]:
         logger.info("enroll reject user=%s pose=%s reason=%r quality_score=%s", user.id, pose_label, quality["reason"], quality["score"])
         raise AppError(quality["reason"], 422)
@@ -299,7 +299,8 @@ def assess_capture_readiness(image_bytes: bytes, pose_label: str | None,
     if err:
         return {"ready": False, "score": 0.0, "reason": err, "yaw": None, "pitch": None}
 
-    quality = assess_quality(image, face.box)
+    # Same floor as enroll_sample, or the preview would say "ready" and the capture would refuse.
+    quality = assess_quality(image, face.box, min_blur=cfg.get("ENROLL_BLUR_THRESHOLD"))
     pose = assess_pose(face, pose_label or "frontal", baseline=baseline, reference=reference)
     score = round((0.5 * quality["score"] + 0.5 * pose["progress"]) if quality["ok"] else 0.0, 3)
     angles = {"yaw": pose["yaw"], "pitch": pose["pitch"]}
@@ -415,7 +416,8 @@ def recognize_burst(frames: list[bytes], zone=None) -> dict:
     vote_ratio = 0.0
     used = 0
     for image, face, _ in best_frames:
-        embedding = engine.embed(enhance_for_embedding(image, face.box, cfg["CLAHE_ENABLED"]), face)
+        embedding = engine.embed(enhance_for_embedding(image, face.box, cfg["CLAHE_ENABLED"]), face,
+                                 num_jitters=engine.DEFAULTS.get("KIOSK_JITTERS", 1))
         if embedding is None:
             continue
         embedding = np.asarray(embedding, dtype=np.float32)

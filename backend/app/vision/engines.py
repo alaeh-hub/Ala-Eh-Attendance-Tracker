@@ -94,9 +94,16 @@ class SFaceEngine(FaceEngine):
     DEFAULTS = {
         # Official SFace operating point is 0.363 (balanced accuracy on
         # LFW). We run stricter for attendance: a wrong-person clock-in is
-        # worse than asking someone to rescan.
-        "FACE_MATCH_THRESHOLD": 0.45,
+        # worse than asking someone to rescan. Measured on all of LFW
+        # (588 enrolled people, single photos, 6,211 stranger probes) with
+        # tools/evaluate_accuracy.py: 0.45 accepted 0.92% of strangers,
+        # 0.50 accepts ~0.2% for ~1.3% rejects (burst voting does better).
+        "FACE_MATCH_THRESHOLD": 0.50,
         "FACE_AMBIGUITY_MARGIN": 0.08,
+        # Variants averaged per kiosk frame: the original plus its mirror
+        # image. Enrollment averages several variants, so a single raw
+        # probe would be compared against a differently-smoothed vector.
+        "KIOSK_JITTERS": 2,
         "ENROLL_CONSISTENCY_THRESHOLD": 0.38,
         "ENROLL_DUPLICATE_THRESHOLD": 0.45,
         "LOW_CONFIDENCE_BAND": 0.08,
@@ -184,6 +191,8 @@ class DlibEngine(FaceEngine):
         # (99.38% LFW) maps to cosine ~0.91.
         "FACE_MATCH_THRESHOLD": 0.91,
         "FACE_AMBIGUITY_MARGIN": 0.03,
+        # dlib jitters are random re-crops at ~300-900ms each: too slow to repeat per frame.
+        "KIOSK_JITTERS": 1,
         "ENROLL_CONSISTENCY_THRESHOLD": 0.87,
         "ENROLL_DUPLICATE_THRESHOLD": 0.91,
         "LOW_CONFIDENCE_BAND": 0.05,
