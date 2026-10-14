@@ -21,7 +21,9 @@ PENDING_STATUSES = ("NO_MATCH", "LOW_CONFIDENCE", "AMBIGUOUS_MATCH", "SPOOF_SUSP
 
 _throttle: dict = {}
 _throttle_lock = threading.Lock()
-_last_purge = 0.0
+_THROTTLE_MAX_KEYS = 2000
+_last_purge: float | None = None  # monotonic time of the last purge; None = never
+_purge_lock = threading.Lock()
 
 
 def _throttled(device_id: str, status: str, seconds: int) -> bool:
@@ -31,9 +33,15 @@ def _throttled(device_id: str, status: str, seconds: int) -> bool:
         if now - _throttle.get(key, -1e9) < seconds:
             return True
         _throttle[key] = now
-        if len(_throttle) > 500:
-            for k in [k for k, t in _throttle.items() if now - t > 3600]:
+        if len(_throttle) > _THROTTLE_MAX_KEYS // 2:
+            # Entries older than the throttle window no longer throttle
+            # anything. device_id is partly client-chosen, so also hard-cap the
+            # map (dropping the oldest) to keep memory bounded.
+            for k in [k for k, t in _throttle.items() if now - t >= seconds]:
                 del _throttle[k]
+            if len(_throttle) > _THROTTLE_MAX_KEYS:
+                for k in sorted(_throttle, key=_throttle.get)[: len(_throttle) - _THROTTLE_MAX_KEYS]:
+                    del _throttle[k]
     return False
 
 
@@ -64,11 +72,21 @@ def save_snapshot(jpeg, status, *, device_id=None, user_id=None, candidate_user_
 def purge_old(force: bool = False) -> int:
     """Delete snapshots past retention (checked at most once an hour)."""
     global _last_purge
-    now = time.monotonic()
-    if not force and now - _last_purge < 3600:
+    # Only one purge at a time; a concurrent opportunistic caller just skips
+    # it, while a forced purge waits its turn so it never silently no-ops.
+    if not _purge_lock.acquire(blocking=force):
         return 0
-    _last_purge = now
-    cfg = current_app.config
+    try:
+        now = time.monotonic()
+        if not force and _last_purge is not None and now - _last_purge < 3600:
+            return 0
+        _last_purge = now
+        return _purge(current_app.config)
+    finally:
+        _purge_lock.release()
+
+
+def _purge(cfg) -> int:
     cutoff_matched = datetime.utcnow() - timedelta(days=cfg["SNAPSHOT_RETENTION_DAYS"])
     cutoff_other = datetime.utcnow() - timedelta(days=cfg["SNAPSHOT_UNMATCHED_RETENTION_DAYS"])
     try:

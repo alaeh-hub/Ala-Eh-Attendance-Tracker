@@ -1,17 +1,20 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { homeFor } from "../../components/AppShell";
 import CameraView, { CameraTone } from "../../components/CameraView";
 import Icon from "../../components/Icon";
 import IdleScreen from "../../components/IdleScreen";
 import { Avatar, EventBadge, Modal, Spinner, formatTime } from "../../components/ui";
-import { useCamera } from "../../hooks/useCamera";
+import { frameDifference, useCamera } from "../../hooks/useCamera";
 import { WAKE_EVENT, useIdle } from "../../hooks/useIdle";
+import { useOnline } from "../../hooks/useOnline";
 import { usePresenceWake } from "../../hooks/usePresenceWake";
 import api, { errorMessage } from "../../services/api";
+import { useAuthStore } from "../../stores/authStore";
 import type { AttendanceEvent, CheckInResult } from "../../types";
 import { guideZone } from "../../utils/guideZone";
 import { BreakWindow, Direction, NOON, Session, defaultSession, sessionAllowed, sessionHint, toMinutes } from "../../utils/kioskSessions";
-import { unlockKiosk } from "../../utils/kioskLock";
+import { formatDate, formatTime as formatOrgTime, orgMinutesNow, orgNow, orgParts, useOrgStore } from "../../utils/orgTime";
 
 // 8 frames ~110ms apart ≈ 0.8s capture. Enough for multi-frame matching;
 // blink samples are pooled server-side across consecutive scans, so a blink
@@ -28,6 +31,15 @@ const KIOSK_IDLE_MS = 60_000;
 // After the idle screen is dismissed, taps are ignored for a moment so the wake-up tap
 // can't land on a button underneath (Start scan, Admin…).
 const WAKE_SHIELD_MS = 450;
+// Presence polling while the idle screen is up: every second at first, backing off to every
+// 4 seconds while nobody is there. A frame that barely differs from the last one checked is
+// not sent at all (the answer can't have changed), except at least every PRESENCE_REFRESH_MS.
+const PRESENCE_MIN_MS = 1000;
+const PRESENCE_MAX_MS = 4000;
+const PRESENCE_STILL_DIFF = 3; // mean grey-level change (0-255) below which the picture is "unchanged"
+const PRESENCE_REFRESH_MS = 15_000;
+
+export const CONNECTION_ERROR_TEXT = "Not recorded — check the connection and try again.";
 
 type Phase =
   | { kind: "idle" }
@@ -48,9 +60,25 @@ function deviceId() {
   }
 }
 
+// One AudioContext for the kiosk's lifetime: browsers cap how many can exist, and a new one per
+// chime eventually stops making sound. It starts "suspended" until the first user gesture.
+let audioCtx: AudioContext | null = null;
+function audio(): AudioContext | null {
+  if (audioCtx) return audioCtx;
+  try {
+    const Ctor = window.AudioContext || (window as any).webkitAudioContext;
+    audioCtx = Ctor ? new Ctor() : null;
+  } catch {
+    audioCtx = null;
+  }
+  return audioCtx;
+}
+
 function chime(success: boolean) {
   try {
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const ctx = audio();
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume().catch(() => undefined);
     const notes = success ? [880, 1318.5] : [330, 262];
     notes.forEach((freq, i) => {
       const osc = ctx.createOscillator();
@@ -65,7 +93,6 @@ function chime(success: boolean) {
       osc.start(t);
       osc.stop(t + 0.3);
     });
-    setTimeout(() => ctx.close(), 800);
   } catch {
     /* audio is optional */
   }
@@ -73,19 +100,21 @@ function chime(success: boolean) {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** The organisation's time (server clock and timezone), not the tablet's. */
 function LiveClock() {
-  const [now, setNow] = useState(new Date());
+  const [now, setNow] = useState(orgNow);
+  useOrgStore((st) => st.timeZone); // re-render when the org timezone arrives
   useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000);
+    const t = setInterval(() => setNow(orgNow()), 1000);
     return () => clearInterval(t);
   }, []);
   return (
     <div className="min-w-0">
       <p className="whitespace-nowrap text-4xl font-extrabold tabular-nums leading-none tracking-tight text-white drop-shadow sm:text-6xl lg:text-7xl [@media(max-height:520px)]:!text-4xl">
-        {now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-        <span className="ml-1.5 hidden text-2xl text-brand-400 sm:inline sm:text-3xl lg:text-4xl [@media(max-height:520px)]:!hidden">{String(now.getSeconds()).padStart(2, "0")}</span>
+        {formatOrgTime(now.toISOString())}
+        <span className="ml-1.5 hidden text-2xl text-brand-400 sm:inline sm:text-3xl lg:text-4xl [@media(max-height:520px)]:!hidden">{String(orgParts(now).second).padStart(2, "0")}</span>
       </p>
-      <p className="mt-1 truncate text-sm font-semibold text-neutral-100 drop-shadow sm:text-base lg:text-xl">{now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}</p>
+      <p className="mt-1 truncate text-sm font-semibold text-neutral-100 drop-shadow sm:text-base lg:text-xl">{formatDate(now, { weekday: "long", month: "long", day: "numeric" })}</p>
     </div>
   );
 }
@@ -107,7 +136,12 @@ function overridePunch(status: StatusOverride): { event_type?: "CLOCK_IN" | "CLO
 }
 
 export default function AttendanceKiosk() {
-  const { videoRef, ready, starting, error, start, captureFrame, captureBurst, devices: cameraDevices, deviceId: cameraDeviceId, isInfrared, switchCamera } = useCamera();
+  const { videoRef, ready, starting, error, start, captureFrame, captureBurst, sampleThumbnail, isInfrared } = useCamera();
+  const user = useAuthStore((st) => st.user);
+  const unlockKiosk = useAuthStore((st) => st.unlockKiosk);
+  // A KIOSK device account can never leave the kiosk; only staff accounts get the Admin button.
+  const isDeviceAccount = user?.role === "KIOSK";
+  const online = useOnline();
   // Scanning only ever runs when someone presses Start — no hands-free
   // continuous scanning by default. A successful or final scan result
   // automatically turns it back off (see hold()) so the next person has
@@ -119,8 +153,13 @@ export default function AttendanceKiosk() {
   // choices follow the same rules the server applies (and the tablet's own clock can be wrong).
   const [breakWin, setBreakWin] = useState<BreakWindow>(NOON);
   const clockBase = useRef<{ minutes: number; at: number } | null>(null);
-  const [nowMin, setNowMin] = useState(() => new Date().getHours() * 60 + new Date().getMinutes());
+  const [nowMin, setNowMin] = useState(() => orgMinutesNow());
   const statusOverride: StatusOverride = direction ? (`${session}_${direction}` as StatusOverride) : "AUTO";
+  // The scan loop reads the current selection through a ref, so changing it never restarts the loop.
+  const statusOverrideRef = useRef(statusOverride);
+  statusOverrideRef.current = statusOverride;
+  // Exactly one check-in request at a time, whatever triggers it.
+  const inFlight = useRef(false);
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [recent, setRecent] = useState<AttendanceEvent[]>([]);
@@ -152,7 +191,7 @@ export default function AttendanceKiosk() {
     const tick = () => {
       const base = clockBase.current;
       if (base) setNowMin((base.minutes + (Date.now() - base.at) / 60000) % 1440);
-      else setNowMin(new Date().getHours() * 60 + new Date().getMinutes());
+      else setNowMin(orgMinutesNow());
     };
     load();
     const refetch = setInterval(load, 10 * 60 * 1000);
@@ -200,6 +239,8 @@ export default function AttendanceKiosk() {
 
   /** One scan. Returns how long to wait before the next automatic scan. */
   const scanOnce = useCallback(async (): Promise<number> => {
+    if (inFlight.current) return 200;
+    inFlight.current = true;
     setBusy(true);
     try {
       const frames = await captureBurst(BURST_FRAMES, BURST_INTERVAL_MS);
@@ -209,7 +250,7 @@ export default function AttendanceKiosk() {
       form.append("device_id", device.current);
       const zone = guideZone(videoRef.current, ovalRef.current);
       if (zone) form.append("zone", JSON.stringify(zone));
-      const punch = overridePunch(statusOverride);
+      const punch = overridePunch(statusOverrideRef.current);
       if (punch.event_type) form.append("event_type", punch.event_type);
       if (punch.session) form.append("session", punch.session);
       const started = performance.now();
@@ -285,19 +326,22 @@ export default function AttendanceKiosk() {
           return 450;
       }
     } catch (err: any) {
-      const msg = !err?.response ? "Can't reach the server. Retrying…" : err.response.data?.error || "Check-in failed.";
-      hold({ kind: "notice", title: "Connection problem", text: msg, tone: "error" }, NOTICE_HOLD_MS);
+      chime(false);
+      if (!err?.response) hold({ kind: "notice", title: "Connection problem", text: CONNECTION_ERROR_TEXT, tone: "error" }, NOTICE_HOLD_MS);
+      else hold({ kind: "notice", title: "Not recorded", text: errorMessage(err, "Check-in failed. Please try again."), tone: "error" }, NOTICE_HOLD_MS);
       return NOTICE_HOLD_MS;
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
-  }, [captureBurst, statusOverride, videoRef]);
+  }, [captureBurst, videoRef]);
 
   // Scanning loop — only runs once armed by pressing Start (see `auto`
   // above). Keeps scanning the person in front of the camera until a
   // result holds (which turns `auto` back off), then stops.
   useEffect(() => {
-    if (!auto || !ready) return;
+    // Offline: pause (the loop resumes by itself when the connection returns).
+    if (!auto || !ready || !online) return;
     let cancelled = false;
     (async () => {
       while (!cancelled) {
@@ -315,7 +359,22 @@ export default function AttendanceKiosk() {
     return () => {
       cancelled = true;
     };
-  }, [auto, ready, scanOnce]);
+  }, [auto, ready, online, scanOnce]);
+
+  // Browsers only let audio play after a user gesture: wake the shared AudioContext on the first one.
+  useEffect(() => {
+    const unlockAudio = () => {
+      audio()?.resume().catch(() => undefined);
+      window.removeEventListener("pointerdown", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
+    };
+    window.addEventListener("pointerdown", unlockAudio);
+    window.addEventListener("keydown", unlockAudio);
+    return () => {
+      window.removeEventListener("pointerdown", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
+    };
+  }, []);
 
   function pickDirection(d: Direction) {
     if (direction === d) {
@@ -327,6 +386,7 @@ export default function AttendanceKiosk() {
   }
 
   function startScan() {
+    if (!online) return;
     holdUntil.current = 0;
     setPhase({ kind: "idle" });
     setAuto(true);
@@ -359,23 +419,35 @@ export default function AttendanceKiosk() {
   // While the idle screen is up the camera keeps running: a small frame goes to the server about
   // once a second to ask whether someone has walked up (inside the circle, close enough), and
   // the screen wakes. The frame is only checked for a face; nothing is stored or identified.
+  const lastPresence = useRef<{ thumb: Uint8ClampedArray | null; present: boolean; at: number } | null>(null);
+  useEffect(() => {
+    if (!idle) lastPresence.current = null;
+  }, [idle]);
   usePresenceWake({
-    enabled: idle && ready,
+    enabled: idle && ready && online,
+    intervalMs: PRESENCE_MIN_MS,
+    maxIntervalMs: PRESENCE_MAX_MS,
     check: async () => {
+      // Nothing moved since the last answer: it still stands, no need to ask the server.
+      const thumb = sampleThumbnail();
+      const last = lastPresence.current;
+      if (last && Date.now() - last.at < PRESENCE_REFRESH_MS && frameDifference(thumb, last.thumb) < PRESENCE_STILL_DIFF) return last.present;
       const frame = await captureFrame(0.6, 480);
       if (!frame) return false;
       const form = new FormData();
       form.append("frame", frame, "presence.jpg");
       const zone = guideZone(videoRef.current, ovalRef.current);
       if (zone) form.append("zone", JSON.stringify(zone));
-      return (await api.post<{ present: boolean }>("/recognition/presence", form)).data.present;
+      const present = (await api.post<{ present: boolean }>("/recognition/presence", form)).data.present;
+      lastPresence.current = { thumb, present, at: Date.now() };
+      return present;
     },
     onWake: () => window.dispatchEvent(new Event(WAKE_EVENT)),
   });
 
   // Prompts that matter while someone is standing there ("blink", "hold still", "scanning…").
   // The idle "press Start" hint is redundant next to the big button, so it is not shown.
-  const prompt = phase.kind === "prompt" ? phase.text : phase.kind === "idle" && ready && auto ? "Scanning… look at the camera" : undefined;
+  const prompt = phase.kind === "prompt" ? phase.text : phase.kind === "idle" && ready && auto && online ? "Scanning… look at the camera" : undefined;
   // The controls step aside while a result is on screen.
   const showControls = phase.kind === "idle" || phase.kind === "prompt";
   const glass = "border border-white/10 bg-black/55 backdrop-blur-md";
@@ -406,9 +478,7 @@ export default function AttendanceKiosk() {
         tone={tone}
         scanning={busy || phase.kind === "prompt"}
         isInfrared={isInfrared}
-        devices={cameraDevices}
-        deviceId={cameraDeviceId}
-        onSwitchCamera={switchCamera}
+        allowCameraSwitch={false}
         toolsClass="right-4 top-24 sm:top-28"
         ovalClass="top-[42%] h-[42%] sm:top-[44%] sm:h-[50%] [@media(orientation:landscape)_and_(min-height:521px)]:top-[46%] [@media(orientation:landscape)_and_(min-height:521px)]:h-[56%] [@media(max-height:520px)]:top-[43%] [@media(max-height:520px)]:h-[46%]"
         overlay={
@@ -427,10 +497,19 @@ export default function AttendanceKiosk() {
                   <Icon name="expand" className="h-5 w-5" />
                   <span className="hidden md:inline">{fullscreen ? "Exit fullscreen" : "Fullscreen"}</span>
                 </button>
-                <button onClick={() => setUnlockOpen(true)} className={hudBtn} title="Back to the admin portal (password required)" aria-label="Admin">
-                  <Icon name="key" className="h-5 w-5 text-brand-400" />
-                  <span className="hidden md:inline">Admin</span>
-                </button>
+                {isDeviceAccount ? (
+                  <span
+                    className={`${glass} hidden items-center gap-2 rounded-full px-4 py-2 text-xs font-medium text-neutral-300 sm:flex`}
+                    title="This tablet is signed in with a kiosk device account. To sign it out, an administrator deactivates or revokes the account."
+                  >
+                    <Icon name="shield" className="h-4 w-4 text-brand-400" /> Kiosk device
+                  </span>
+                ) : (
+                  <button onClick={() => setUnlockOpen(true)} className={hudBtn} title="Back to the admin portal (password required)" aria-label="Back to admin">
+                    <Icon name="key" className="h-5 w-5 text-brand-400" />
+                    <span className="hidden md:inline">Admin</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -440,6 +519,12 @@ export default function AttendanceKiosk() {
                 <span key={prompt} className={`${glass} whitespace-nowrap rounded-full px-6 py-2.5 text-center text-base font-semibold text-white animate-fade-up sm:text-xl [@media(max-height:520px)]:!px-4 [@media(max-height:520px)]:!py-1.5 [@media(max-height:520px)]:!text-sm`}>
                   {prompt}
                 </span>
+              </div>
+            )}
+
+            {!online && (
+              <div role="alert" className="absolute inset-x-4 top-24 z-10 mx-auto flex max-w-xl items-center gap-2 rounded-xl border border-orange-400/50 bg-black/85 px-4 py-3 text-sm font-semibold text-orange-200 backdrop-blur sm:top-28">
+                <Icon name="alert" className="h-4 w-4 shrink-0" /> No network connection. Scanning is paused until it is back.
               </div>
             )}
 
@@ -478,7 +563,8 @@ export default function AttendanceKiosk() {
                           key={d.label}
                           onClick={() => (d.value ? pickDirection(d.value) : setDirection(null))}
                           aria-pressed={direction === d.value}
-                          className={`${seg} h-14 text-lg sm:h-16 sm:text-xl [@media(max-height:520px)]:!h-11 [@media(max-height:520px)]:!text-base ${direction === d.value ? d.on : "text-neutral-200 hover:bg-white/10"}`}
+                          disabled={busy}
+                          className={`${seg} h-14 text-lg disabled:opacity-50 sm:h-16 sm:text-xl [@media(max-height:520px)]:!h-11 [@media(max-height:520px)]:!text-base ${direction === d.value ? d.on : "text-neutral-200 hover:bg-white/10"}`}
                         >
                           {d.label}
                         </button>
@@ -492,7 +578,7 @@ export default function AttendanceKiosk() {
                               key={o.value}
                               onClick={() => setSession(o.value)}
                               aria-pressed={session === o.value}
-                              disabled={!sessionAllowed(o.value, direction, nowMin, breakWin)}
+                              disabled={busy || !sessionAllowed(o.value, direction, nowMin, breakWin)}
                               title={sessionAllowed(o.value, direction, nowMin, breakWin) ? undefined : sessionHint(o.value, direction, breakWin)}
                               className={`${seg} rounded-lg text-sm disabled:cursor-not-allowed disabled:opacity-30 disabled:active:scale-100 sm:text-base ${session === o.value ? "bg-white text-black" : "text-neutral-200 hover:bg-white/10"}`}
                             >
@@ -511,7 +597,7 @@ export default function AttendanceKiosk() {
                         <Icon name="pause" className="h-9 w-9 sm:h-11 sm:w-11 [@media(max-height:520px)]:!h-6 [@media(max-height:520px)]:!w-6" strokeWidth={2.2} /> Stop
                       </button>
                     ) : (
-                      <button onClick={startScan} className={`${startBtn} bg-brand-500 text-black shadow-[0_0_50px_-8px_rgba(245,192,0,.8)] hover:bg-brand-400`}>
+                      <button onClick={startScan} disabled={!online} className={`${startBtn} disabled:cursor-not-allowed disabled:opacity-50 bg-brand-500 text-black shadow-[0_0_50px_-8px_rgba(245,192,0,.8)] hover:bg-brand-400`}>
                         <Icon name="scan" className="h-9 w-9 sm:h-11 sm:w-11 [@media(max-height:520px)]:!h-6 [@media(max-height:520px)]:!w-6" strokeWidth={2.2} /> Start scan
                       </button>
                     ))}
@@ -531,10 +617,11 @@ export default function AttendanceKiosk() {
       <KioskUnlock
         open={unlockOpen}
         onClose={() => setUnlockOpen(false)}
+        unlock={unlockKiosk}
         onUnlocked={() => {
-          unlockKiosk();
           if (document.fullscreenElement) document.exitFullscreen().catch(() => undefined);
-          navigate("/admin");
+          // Operators' home is the kiosk itself; send both admins and operators to the portal.
+          navigate(user && homeFor(user.role) !== "/kiosk" ? homeFor(user.role) : "/admin", { replace: true });
         }}
       />
     </div>
@@ -542,7 +629,7 @@ export default function AttendanceKiosk() {
 }
 
 /** Password prompt guarding the way back into the admin portal. */
-function KioskUnlock({ open, onClose, onUnlocked }: { open: boolean; onClose: () => void; onUnlocked: () => void }) {
+function KioskUnlock({ open, onClose, onUnlocked, unlock }: { open: boolean; onClose: () => void; onUnlocked: () => void; unlock: (password: string) => Promise<void> }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -560,10 +647,12 @@ function KioskUnlock({ open, onClose, onUnlocked }: { open: boolean; onClose: ()
     setChecking(true);
     setError(null);
     try {
-      await api.post("/auth/verify-password", { password });
+      // Server-enforced: swaps the kiosk-locked session for a normal one.
+      await unlock(password);
       onUnlocked();
-    } catch (err) {
-      setError(errorMessage(err, "Could not verify the password."));
+    } catch (err: any) {
+      const code = err?.response?.data?.code;
+      setError(code === "WRONG_PASSWORD" ? "Wrong password. Try again." : errorMessage(err, "Could not verify the password."));
       setPassword("");
     } finally {
       setChecking(false);
@@ -572,7 +661,7 @@ function KioskUnlock({ open, onClose, onUnlocked }: { open: boolean; onClose: ()
 
   return (
     <Modal open={open} onClose={onClose} title="Back to admin">
-      <form onSubmit={submit} className="space-y-4 p-6">
+      <form onSubmit={submit} className="space-y-4">
         <p className="text-sm text-neutral-400">Enter your password to leave the kiosk and open the admin portal.</p>
         <input
           type="password"

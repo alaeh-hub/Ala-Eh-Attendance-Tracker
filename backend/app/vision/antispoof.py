@@ -21,11 +21,11 @@ this layer is what stops a photo of a coworker that includes open eyes.
 import glob
 import logging
 import os
-import threading
 
 import cv2
 import numpy as np
 
+from app.vision._locks import native_lock
 from app.vision.engines import MODELS_DIR
 
 logger = logging.getLogger("app.antispoof")
@@ -99,7 +99,7 @@ def texture_realness(image_bgr: np.ndarray, face_box) -> float:
 
 class AntiSpoof:
     def __init__(self):
-        self._lock = threading.Lock()
+        self._lock = native_lock()  # cv2.dnn nets are not thread-safe; called from tpool threads
         self._nets: list = []
         for path in sorted(glob.glob(os.path.join(MODELS_DIR, "*MiniFASNet*.onnx"))):
             name = os.path.basename(path)
@@ -131,7 +131,7 @@ class AntiSpoof:
 
 
 _instance = None
-_instance_lock = threading.Lock()
+_instance_lock = native_lock()
 
 
 def get_antispoof() -> AntiSpoof:

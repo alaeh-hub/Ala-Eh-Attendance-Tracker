@@ -8,13 +8,13 @@ a version so the next request rebuilds it. Matching a frame is a single
 matrix-vector product.
 """
 import json
-import threading
 
 import numpy as np
 
 from app.extensions import db
 from app.models.face_embedding import FaceEmbedding
 from app.models.user import User
+from app.vision._locks import native_lock
 from app.vision.embedding import normalize
 from app.vision.engines import get_engine
 from app.vision.matcher import rank_users
@@ -34,22 +34,26 @@ def model_filter(engine_name: str):
 
 class EmbeddingIndex:
     def __init__(self):
-        self._lock = threading.Lock()
+        # Shared by request greenlets and eventlet.tpool recognition threads,
+        # so it must be an OS lock; it is never held across database I/O.
+        self._lock = native_lock()
         self._dirty = True
+        self._generation = 0  # bumped by every invalidate()
+        self._installed_generation = -1  # generation the cached matrix was loaded at
         self._matrix = np.zeros((0, 0), dtype=np.float32)
         self._owners = np.zeros(0, dtype=np.int64)
         self._user_ids: list[str] = []
         self._centroids = np.zeros((0, 0), dtype=np.float32)
 
     def invalidate(self):
-        # Keep invalidation ordered with rebuilds. Without the lock, an
-        # enrollment update can set _dirty while _rebuild is running, then
-        # _rebuild can overwrite it with False and leave stale embeddings
-        # cached until another update happens.
+        # Every invalidate bumps the generation, so a rebuild that started
+        # before it can never mark the index clean (see _snapshot).
         with self._lock:
             self._dirty = True
+            self._generation += 1
 
-    def _rebuild(self):
+    def _load(self):
+        """Read and normalise the active engine's samples (no lock held)."""
         rows = (
             db.session.query(FaceEmbedding.user_id, FaceEmbedding.vector_json)
             .join(User, User.id == FaceEmbedding.user_id)
@@ -89,14 +93,27 @@ class EmbeddingIndex:
             norms = np.linalg.norm(centroids, axis=1, keepdims=True)
             centroids = centroids / np.where(norms == 0, 1, norms)
 
-        self._matrix, self._owners, self._user_ids, self._centroids = matrix, owners_arr, user_ids, centroids
-        self._dirty = False
+        return matrix, owners_arr, centroids, user_ids
 
     def _snapshot(self):
         with self._lock:
-            if self._dirty:
-                self._rebuild()
-            return self._matrix, self._owners, self._centroids, self._user_ids
+            if not self._dirty:
+                return self._matrix, self._owners, self._centroids, self._user_ids
+            generation = self._generation
+        # Rebuild outside the lock: the query must not stall (or, under
+        # eventlet, deadlock) every other scan. Two concurrent rebuilds just
+        # do the same work twice.
+        loaded = self._load()
+        with self._lock:
+            # A slower, older rebuild must not overwrite a newer one.
+            if generation >= self._installed_generation:
+                self._matrix, self._owners, self._centroids, self._user_ids = loaded
+                self._installed_generation = generation
+            # An invalidate() during the load means it may be stale already:
+            # use it for this call, but rebuild again on the next one.
+            if self._generation == generation:
+                self._dirty = False
+        return loaded
 
     def rank(self, query: np.ndarray, exclude_user_id: str | None = None) -> list:
         matrix, owners, centroids, user_ids = self._snapshot()

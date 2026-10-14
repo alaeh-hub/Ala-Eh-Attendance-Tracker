@@ -20,7 +20,6 @@ Thresholds are cosine similarity on unit vectors, calibrated per engine
   dlib : 0.97 / up to 0.85      sface: 0.75 / at most 0.30
 """
 import os
-import threading
 from dataclasses import dataclass
 
 import cv2
@@ -28,6 +27,7 @@ import dlib
 import numpy as np
 
 from app.vision import detector as hog
+from app.vision._locks import native_lock
 from app.vision.embedding import embedding_provider as dlib_provider, normalize
 
 MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models")
@@ -112,9 +112,9 @@ class SFaceEngine(FaceEngine):
     }
 
     def __init__(self):
-        # OpenCV DNN objects are not thread-safe; the lock is uncontended
-        # in the single-worker deployment but keeps the dev server safe.
-        self._lock = threading.Lock()
+        # OpenCV DNN objects are not thread-safe. Recognition runs in
+        # eventlet.tpool OS threads, so this must be a native lock.
+        self._lock = native_lock()
         self._detector = cv2.FaceDetectorYN.create(YUNET_PATH, "", (320, 320), 0.75, 0.3, 50)
         self._recognizer = cv2.FaceRecognizerSF.create(SFACE_PATH, "")
 
@@ -200,21 +200,31 @@ class DlibEngine(FaceEngine):
         "EARLY_EXIT_MARGIN": 0.03,
     }
 
+    def __init__(self):
+        # dlib's HOG detector, shape predictor and ResNet keep per-call
+        # scratch buffers and are not safe to share across OS threads.
+        self._lock = native_lock()
+
     def detect(self, image_bgr, detection_width):
         rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        return [Face(box=b, score=s) for b, s in hog.detect_faces(rgb, detection_width)]
+        with self._lock:
+            found = hog.detect_faces(rgb, detection_width)
+        return [Face(box=b, score=s) for b, s in found]
 
     def track(self, image_bgr, previous, detection_width):
-        box = hog.detect_in_region(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB), previous.box, detection_width)
+        rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        with self._lock:
+            box = hog.detect_in_region(rgb, previous.box, detection_width)
         return Face(box=box, score=previous.score) if box else None
 
     def embed(self, image_bgr, face, num_jitters=1):
         rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        return dlib_provider.generate_embedding(rgb, face.box, num_jitters)
+        with self._lock:
+            return dlib_provider.generate_embedding(rgb, face.box, num_jitters)
 
 
 _engine: FaceEngine | None = None
-_engine_lock = threading.Lock()
+_engine_lock = native_lock()
 
 
 def sface_available() -> bool:

@@ -1,5 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { useUserSearch } from "../../components/admin/EmployeePicker";
+import { isCancelled, retryAfterSeconds } from "../../components/admin/request";
+import { ROLE_HELP } from "../../components/admin/roles";
 import CameraView, { CameraTone } from "../../components/CameraView";
 import Icon from "../../components/Icon";
 import { Avatar, ConfirmDialog, Field, PageHeader, RoleBadge, Spinner, forgetPhoto } from "../../components/ui";
@@ -8,7 +11,6 @@ import api, { errorMessage } from "../../services/api";
 import { toast } from "../../stores/toastStore";
 import type { Department, EnrollmentStatus, Role, User } from "../../types";
 import { guideZone } from "../../utils/guideZone";
-import { smartMatch } from "../../utils/search";
 
 const POSES: Record<string, { title: string; hint: string; arrow?: string }> = {
   frontal: { title: "Look straight ahead", hint: "Face the camera, neutral expression" },
@@ -19,6 +21,8 @@ const POSES: Record<string, { title: string; hint: string; arrow?: string }> = {
   frontal_2: { title: "Straight ahead, smile", hint: "A natural smile helps with expression changes" },
 };
 const AUTO_CAPTURE_INTERVAL_MS = 700;
+/** After a rejected capture, wait this long before readiness (and so auto-capture) resumes. */
+const REJECT_PAUSE_MS = 1500;
 
 type Step = 1 | 2 | 3;
 
@@ -133,9 +137,11 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
   const [errors, setErrors] = useState<Partial<Record<keyof typeof EMPTY_FORM, string>>>({});
   const [saving, setSaving] = useState(false);
   const [departments, setDepartments] = useState<Department[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
   const [search, setSearch] = useState("");
-  const [loadingUsers, setLoadingUsers] = useState(false);
+  // Server-side search: never download the whole employee list.
+  const { users, total, loading: loadingUsers, error: usersError } = useUserSearch(search, { status: "active", limit: 30, enabled: mode === "existing" });
+  // Kiosk device accounts are tablets, not people: nothing to enroll.
+  const people = users.filter((u) => u.role !== "KIOSK");
 
   useEffect(() => {
     api.get<Department[]>("/departments").then((r) => setDepartments(r.data)).catch(() => undefined);
@@ -143,16 +149,6 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
   }, []);
 
   const selectedDept = departments.find((d) => d.name === form.department);
-
-  useEffect(() => {
-    if (mode !== "existing") return;
-    setLoadingUsers(true);
-    api
-      .get<User[]>("/users", { params: { status: "active" } })
-      .then((r) => setUsers(r.data))
-      .catch(() => toast.error("Couldn't load employees"))
-      .finally(() => setLoadingUsers(false));
-  }, [mode]);
 
   const set = (k: keyof typeof EMPTY_FORM) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const value = e.target.type === "checkbox" ? (e.target as HTMLInputElement).checked : e.target.value;
@@ -166,14 +162,14 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(form.email.trim())) er.email = "Enter a valid email address.";
     if (form.employee_code && !/^[A-Za-z0-9._-]{1,40}$/.test(form.employee_code.trim())) er.employee_code = "Letters, numbers, dot, dash, underscore only.";
     const needsPassword = form.allow_login || form.role !== "STAFF";
-    if (needsPassword && form.password.length < 8) er.password = "At least 8 characters.";
+    if (needsPassword && (form.password.length < 8 || form.password.length > 72)) er.password = "8–72 characters.";
     setErrors(er);
     return Object.keys(er).length === 0;
   }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!validate()) return;
+    if (saving || !validate()) return;
     setSaving(true);
     try {
       const needsPassword = form.allow_login || form.role !== "STAFF";
@@ -187,6 +183,14 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
         role: form.role,
         password: needsPassword ? form.password : undefined,
       });
+      if (res.data.role === "KIOSK") {
+        // A device account has no face to enroll: it signs in on the kiosk tablet with its password.
+        toast.success("Kiosk device account created", `Sign in as ${res.data.email} on the kiosk tablet.`);
+        setForm({ ...EMPTY_FORM });
+        setErrors({});
+        api.get("/users/next-code").then((r) => setForm((f) => (f.employee_code ? f : { ...f, employee_code: r.data.employee_code }))).catch(() => undefined);
+        return;
+      }
       toast.success("Employee saved", `${res.data.full_name} · ${res.data.employee_code}`);
       onReady(res.data);
     } catch (err) {
@@ -199,16 +203,15 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
     }
   }
 
-  const filtered = useMemo(() => {
-    return users.filter((u) => smartMatch(search, [u.full_name, u.email, u.employee_code, u.department]));
-  }, [users, search]);
-
   return (
     <div className="card overflow-hidden animate-fade-up">
-      <div className="flex border-b border-white/[0.06]">
+      <div className="flex border-b border-white/[0.06]" role="tablist" aria-label="Employee">
         {(["new", "existing"] as const).map((m) => (
           <button
             key={m}
+            type="button"
+            role="tab"
+            aria-selected={mode === m}
             onClick={() => setMode(m)}
             className={`relative flex-1 px-4 py-4 text-sm font-semibold transition-colors ${mode === m ? "text-white" : "text-neutral-500 hover:text-neutral-300"}`}
           >
@@ -270,11 +273,12 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
                 <input className="input" value={form.position} onChange={set("position")} placeholder="Line Operator" />
               )}
             </Field>
-            <Field label="System role">
+            <Field label="System role" hint={ROLE_HELP[form.role]}>
               <select className="input" value={form.role} onChange={set("role")}>
                 <option value="STAFF">Staff — clocks in only</option>
                 <option value="OPERATOR">Operator — runs kiosk & reports</option>
                 <option value="ADMIN">Admin — full access</option>
+                <option value="KIOSK">Kiosk device — tablet sign-in only</option>
               </select>
             </Field>
           </div>
@@ -290,10 +294,14 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
               />
               <span>
                 <span className="flex items-center gap-2 text-sm font-semibold text-white">
-                  <Icon name="key" className="h-4 w-4 text-brand-400" /> Allow web sign-in
+                  <Icon name="key" className="h-4 w-4 text-brand-400" /> {form.role === "KIOSK" ? "Device sign-in" : "Allow web sign-in"}
                 </span>
                 <span className="text-xs text-neutral-500">
-                  {form.role !== "STAFF" ? "Required for admins and operators." : "Optional. Staff can view their own attendance history."}
+                  {form.role === "KIOSK"
+                    ? "Required: the kiosk tablet signs in with this email and password. It can only run the attendance kiosk."
+                    : form.role !== "STAFF"
+                      ? "Required for admins and operators."
+                      : "Optional. Staff can view their own attendance history."}
                 </span>
               </span>
             </label>
@@ -309,7 +317,7 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
           <div className="mt-8 flex justify-end">
             <button type="submit" className="btn-primary min-h-12 w-full px-6 sm:w-auto" disabled={saving}>
               {saving ? <Spinner /> : null}
-              {saving ? "Saving…" : "Save & continue to face capture"}
+              {saving ? "Saving…" : form.role === "KIOSK" ? "Create kiosk device account" : "Save & continue to face capture"}
               {!saving && <Icon name="arrow_right" className="h-4 w-4" />}
             </button>
           </div>
@@ -318,14 +326,24 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
         <div className="p-6 animate-fade-in">
           <div className="relative mb-4">
             <Icon name="search" className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
-            <input className="input pl-10" placeholder="Search by name, ID, email or department…" value={search} onChange={(e) => setSearch(e.target.value)} autoFocus />
+            <input
+              className="input pl-10"
+              placeholder="Search by name, ID, email or department…"
+              aria-label="Search employees"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              autoFocus
+            />
           </div>
-          <div className="max-h-[440px] space-y-1 overflow-y-auto">
-            {loadingUsers && Array.from({ length: 4 }).map((_, i) => <div key={i} className="skeleton h-16 w-full rounded-xl" />)}
-            {!loadingUsers && filtered.length === 0 && <p className="py-10 text-center text-sm text-neutral-500">No matching active employees.</p>}
-            {filtered.map((u) => (
+          <div className="max-h-[440px] space-y-1 overflow-y-auto" aria-busy={loadingUsers}>
+            {loadingUsers && people.length === 0 && Array.from({ length: 4 }).map((_, i) => <div key={i} className="skeleton h-16 w-full rounded-xl" />)}
+            {!loadingUsers && people.length === 0 && (
+              <p className="py-10 text-center text-sm text-neutral-500">{usersError ? "Couldn't load employees." : "No matching active employees."}</p>
+            )}
+            {people.map((u) => (
               <button
                 key={u.id}
+                type="button"
                 onClick={() => onReady(u)}
                 className="group flex w-full items-center gap-4 rounded-xl border border-transparent p-3 text-left transition-all hover:border-brand-500/30 hover:bg-brand-500/[0.06]"
               >
@@ -342,6 +360,11 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
                 <Icon name="arrow_right" className="h-4 w-4 text-neutral-600 transition-transform group-hover:translate-x-0.5 group-hover:text-brand-400" />
               </button>
             ))}
+            {total > users.length && (
+              <p className="px-3 py-2 text-xs text-neutral-500">
+                Showing the first {users.length} of {total} — keep typing to narrow down.
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -367,9 +390,15 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
   const [consent, setConsent] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [readiness, setReadiness] = useState<{ ready: boolean; score: number; reason: string | null } | null>(null);
+  const [finishing, setFinishing] = useState(false);
   const busyRef = useRef(false);
   const checkingRef = useRef(false);
-  const readyFrameRef = useRef<Blob | null>(null);
+  // The first frame that passed the readiness check for the current pose, with the head angles
+  // measured on it. Calibration is only committed from it once the server ACCEPTS the sample.
+  const readyFrameRef = useRef<{ blob: Blob; pose: string; yaw: number; pitch: number } | null>(null);
+  // Readiness checks (and therefore auto-capture) are paused until this time: after a rejected
+  // capture, so the same rejected frame isn't resubmitted every few hundred ms, and after a 429.
+  const pauseUntilRef = useRef(0);
   // Calibration against THIS employee's own poses, so left/right and
   // up/down are told apart by contrast rather than an absolute guess —
   // see backend app/vision/pose.py for why. baseline = this employee's
@@ -415,7 +444,7 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
     readyFrameRef.current = null;
     const base = currentPose!.split("_")[0];
     async function tick() {
-      if (cancelled || checkingRef.current || busyRef.current) return;
+      if (cancelled || checkingRef.current || busyRef.current || Date.now() < pauseUntilRef.current) return;
       checkingRef.current = true;
       try {
         const blob = await captureFrame(0.92);
@@ -434,7 +463,8 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
         if (base === "down" && cal.upPitch !== undefined) form.append("reference_pitch", String(cal.upPitch));
 
         const res = await api.post<{ ready: boolean; score: number; reason: string | null; yaw: number | null; pitch: number | null }>("/enrollment/check", form);
-        if (cancelled) return;
+        // A check that was already in flight when a capture got rejected (or a 429 arrived) is stale.
+        if (cancelled || busyRef.current || Date.now() < pauseUntilRef.current) return;
         setReadiness(res.data);
 
         if (!res.data.ready) readyFrameRef.current = null;
@@ -442,25 +472,20 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
         // Keep the first frame which actually passes readiness. The sample
         // is submitted from this checked frame, so continued movement during
         // the auto-capture delay cannot turn a valid pose into an extreme one.
-        if (res.data.ready && res.data.yaw != null && res.data.pitch != null) {
-          if (!readyFrameRef.current) {
-            readyFrameRef.current = blob;
-            // Calibrate the next pose from the same frame we will enroll.
-            if (base === "frontal" && cal.baselineYaw === undefined) {
-              cal.baselineYaw = res.data.yaw;
-              cal.baselinePitch = res.data.pitch;
-            }
-            if (base === "left" && cal.leftYaw === undefined) {
-              cal.leftYaw = res.data.yaw - (cal.baselineYaw ?? 0);
-            }
-            if (base === "up" && cal.upPitch === undefined) {
-              cal.upPitch = res.data.pitch - (cal.baselinePitch ?? 0);
-            }
-            saveCalibration(employee.id, cal);
-          }
+        if (res.data.ready && res.data.yaw != null && res.data.pitch != null && !readyFrameRef.current) {
+          readyFrameRef.current = { blob, pose: currentPose!, yaw: res.data.yaw, pitch: res.data.pitch };
         }
-      } catch {
-        /* transient check failure — next tick retries */
+      } catch (err) {
+        if (cancelled || isCancelled(err)) return;
+        const wait = retryAfterSeconds(err);
+        if (wait !== null) {
+          // Rate limited: back off for as long as the server asks instead of hammering it.
+          pauseUntilRef.current = Date.now() + wait * 1000;
+          readyFrameRef.current = null;
+          setReadiness(null);
+          setHint({ text: `Too many checks — pausing for ${Math.ceil(wait)} s.`, tone: "warn" });
+        }
+        /* other failures are transient — the next tick retries */
       } finally {
         checkingRef.current = false;
       }
@@ -471,14 +496,37 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
       cancelled = true;
       clearInterval(t);
     };
-  }, [ready, currentPose, blocking, allPosesDone, captureFrame, videoRef, employee.id]);
+  }, [ready, currentPose, blocking, allPosesDone, captureFrame, videoRef]);
+
+  /** Record calibration from a frame whose sample the server accepted (never from a rejected one). */
+  const commitCalibration = useCallback(
+    (frame: { pose: string; yaw: number; pitch: number }) => {
+      const cal = calibration.current;
+      const base = frame.pose.split("_")[0];
+      if (base === "frontal" && cal.baselineYaw === undefined) {
+        cal.baselineYaw = frame.yaw;
+        cal.baselinePitch = frame.pitch;
+      } else if (base === "left" && cal.leftYaw === undefined) {
+        cal.leftYaw = frame.yaw - (cal.baselineYaw ?? 0);
+      } else if (base === "up" && cal.upPitch === undefined) {
+        cal.upPitch = frame.pitch - (cal.baselinePitch ?? 0);
+      } else {
+        return;
+      }
+      saveCalibration(employee.id, cal);
+    },
+    [employee.id]
+  );
 
   const capture = useCallback(async () => {
     if (busyRef.current || !currentPose || blocking) return;
     busyRef.current = true;
     setBusy(true);
+    const frame = readyFrameRef.current?.pose === currentPose ? readyFrameRef.current : null;
+    // Whatever happens, this frame is used at most once.
+    readyFrameRef.current = null;
     try {
-      const blob = readyFrameRef.current ?? await captureFrame(0.92);
+      const blob = frame?.blob ?? (await captureFrame(0.92));
       if (!blob) return;
       const form = new FormData();
       form.append("image", blob, "capture.jpg");
@@ -488,6 +536,7 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
       if (zone) form.append("zone", JSON.stringify(zone));
       if (consent) form.append("consent", "true");
       const res = await api.post<EnrollmentStatus & { quality_score: number }>("/enrollment/sample", form);
+      if (frame) commitCalibration(frame);
       setStatus(res.data);
       setCaptured(res.data.poses_captured);
       setFlash(true);
@@ -497,9 +546,15 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
     } catch (err: any) {
       const code = err?.response?.data?.code;
       const msg = errorMessage(err, "Capture rejected — try again.");
+      // Don't let auto-capture resubmit the same rejected frame: wait for fresh readiness checks.
+      const wait = retryAfterSeconds(err);
+      pauseUntilRef.current = Date.now() + (wait !== null ? wait * 1000 : REJECT_PAUSE_MS);
+      setReadiness(null);
       if (code === "DUPLICATE_FACE" || code === "INCONSISTENT_FACE") {
         setBlocking(msg);
         setAuto(false);
+      } else if (wait !== null) {
+        setHint({ text: `Too many attempts — pausing for ${Math.ceil(wait)} s.`, tone: "warn" });
       } else {
         setHint({ text: msg, tone: "warn" });
       }
@@ -507,7 +562,7 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
       busyRef.current = false;
       setBusy(false);
     }
-  }, [captureFrame, currentPose, employee.id, blocking, consent, videoRef]);
+  }, [captureFrame, currentPose, employee.id, blocking, consent, videoRef, commitCalibration]);
 
   // Auto-capture: only fires once the live readiness check says the pose
   // and quality are good, giving the employee time to get into position
@@ -524,6 +579,7 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
   }, [allPosesDone, stop]);
 
   async function reset() {
+    if (resetting) return;
     setResetting(true);
     try {
       const res = await api.delete<EnrollmentStatus>("/enrollment/samples", { params: { target_user_id: employee.id } });
@@ -531,6 +587,8 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
       setCaptured([]);
       calibration.current = {};
       saveCalibration(employee.id, null);
+      readyFrameRef.current = null;
+      pauseUntilRef.current = 0;
       setBlocking(null);
       setHint(null);
       forgetPhoto(employee.id);
@@ -545,10 +603,17 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
   }
 
   async function finish() {
-    saveCalibration(employee.id, null);
-    forgetPhoto(employee.id);
-    const res = await api.get<User>(`/users/${employee.id}`);
-    onDone(res.data);
+    if (finishing) return;
+    setFinishing(true);
+    try {
+      const res = await api.get<User>(`/users/${employee.id}`);
+      saveCalibration(employee.id, null);
+      forgetPhoto(employee.id);
+      onDone(res.data);
+    } catch (err) {
+      toast.error("Couldn't finish enrollment", errorMessage(err, "Check the connection and try again. The captured samples are saved."));
+      setFinishing(false);
+    }
   }
 
   const pose = currentPose ? POSES[currentPose] ?? { title: "Look at the camera", hint: "" } : null;
@@ -626,6 +691,7 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
 
         {hint && !blocking && (
           <p
+            role="status"
             className={`mt-3 flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm animate-fade-in ${
               hint.tone === "success" ? "bg-emerald-500/10 text-emerald-300" : "bg-orange-500/10 text-orange-300"
             }`}
@@ -653,12 +719,12 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
 
         {ready && !allPosesDone && (
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 px-1">
-            <button onClick={() => setAuto((a) => !a)} className={`btn min-h-12 px-5 ${auto ? "border border-brand-500/40 bg-brand-500/10 text-brand-300" : "btn-ghost"}`} disabled={!!blocking}>
+            <button type="button" aria-pressed={auto} onClick={() => setAuto((a) => !a)} className={`btn min-h-12 px-5 ${auto ? "border border-brand-500/40 bg-brand-500/10 text-brand-300" : "btn-ghost"}`} disabled={!!blocking}>
               <Icon name={auto ? "bolt" : "pause"} className="h-4 w-4" />
               {auto ? "Auto-capture on" : "Auto-capture paused"}
             </button>
             {!auto && (
-              <button onClick={capture} className="btn-primary min-h-12 px-6" disabled={busy || !!blocking || !readiness?.ready || !consentOk}>
+              <button type="button" onClick={capture} className="btn-primary min-h-12 px-6" disabled={busy || !!blocking || !readiness?.ready || !consentOk}>
                 {busy ? <Spinner /> : <Icon name="camera" className="h-4 w-4" />} {readiness?.ready ? "Capture pose" : "Not ready yet"}
               </button>
             )}
@@ -739,9 +805,10 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
         )}
 
         <div className="flex flex-col gap-2">
-          <button className="btn-primary w-full py-3" disabled={!canFinish} onClick={finish}>
+          <button className="btn-primary w-full py-3" disabled={!canFinish || finishing} onClick={finish} aria-busy={finishing}>
+            {finishing && <Spinner />}
             {canFinish ? "Finish enrollment" : `Capture ${minRequired - count} more to finish`}
-            {canFinish && <Icon name="arrow_right" className="h-4 w-4" />}
+            {canFinish && !finishing && <Icon name="arrow_right" className="h-4 w-4" />}
           </button>
           <div className="flex gap-2">
             <button className="btn-ghost flex-1 py-2 text-xs" onClick={onBack}>
@@ -767,7 +834,7 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
         danger
         busy={resetting}
         onConfirm={reset}
-        onClose={() => setConfirmReset(false)}
+        onClose={() => !resetting && setConfirmReset(false)}
       />
     </div>
   );

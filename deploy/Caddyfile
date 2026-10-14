@@ -1,0 +1,97 @@
+# Edge proxy for the attendance system (docker-compose service "caddy").
+#
+# The single public origin:
+#   /api/*, /socket.io/*  -> backend:5000  (Flask + Socket.IO; WebSockets just work)
+#   everything else       -> frontend:8080 (nginx serving the built SPA)
+#
+# Configured from the repo-root .env (see deploy/env.example):
+#   SITE_ADDRESS  attendance.example.com | attendance.lan | 192.168.1.50 | localhost
+#   TLS_MODE      acme     - public DNS name, automatic Let's Encrypt/ZeroSSL cert, HSTS on
+#                 internal - Caddy's own local CA (LAN installs; install its root on kiosks)
+#                 files    - your own cert: deploy/certs/cert.pem + deploy/certs/key.pem
+#
+# Environment placeholders ({$VAR}) are substituted before the file is
+# parsed, which is what lets TLS_MODE pick one of the snippets below.
+
+{
+	# Caddy runs in a container: don't try to add its local CA to the
+	# container's trust store (pointless, and it logs a warning).
+	skip_install_trust
+	servers {
+		timeouts {
+			read_header 15s
+			# Enrollment / kiosk bursts upload a few MB of JPEGs.
+			read_body 60s
+			idle 5m
+		}
+	}
+}
+
+(tls_acme) {
+	# Only with a real, publicly trusted certificate: a browser that saw
+	# HSTS for a name refuses to ever load it with a cert error again.
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+}
+
+(tls_internal) {
+	tls internal
+}
+
+(tls_files) {
+	tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+}
+
+{$SITE_ADDRESS:localhost} {
+	import tls_{$TLS_MODE:internal}
+
+	encode zstd gzip
+
+	# Flask rejects bodies over 16 MB itself; this stops anything larger at the edge.
+	request_body {
+		max_size 20MB
+	}
+
+	header {
+		# Apply after the upstream responded, replacing any copy it sent.
+		defer
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(self), microphone=(), geolocation=()"
+		-Server
+		-X-Powered-By
+	}
+
+	@backend path /api /api/* /socket.io /socket.io/*
+	handle @backend {
+		reverse_proxy backend:5000 {
+			# Caddy sets X-Forwarded-For/-Proto/-Host and overwrites any the
+			# client sent; the backend trusts exactly one hop (TRUST_PROXY_HOPS=1).
+			flush_interval -1
+			# Keep WebSockets open for a while across `caddy reload`.
+			stream_close_delay 5m
+			transport http {
+				dial_timeout 5s
+				# gunicorn --timeout is 120s; give a slow recognition burst room.
+				response_header_timeout 125s
+			}
+		}
+	}
+
+	handle {
+		# CSP for the single-page app only (the API sets its own, stricter one).
+		# - styles: 'unsafe-inline' because libraries (recharts, the mascot)
+		#   inject style elements; Google Fonts CSS is loaded by index.html.
+		# - connect-src: XHR + Socket.IO to this origin only.
+		header {
+			defer
+			Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' wss://{host}; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		}
+		reverse_proxy frontend:8080
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

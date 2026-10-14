@@ -1,4 +1,5 @@
-export type Role = "ADMIN" | "STAFF" | "OPERATOR";
+/** KIOSK is a device account: it signs in on a kiosk tablet and is always kiosk-locked. */
+export type Role = "ADMIN" | "STAFF" | "OPERATOR" | "KIOSK";
 
 export interface Shift {
   name: string;
@@ -48,6 +49,11 @@ export interface AttendanceEvent {
   event_type: "CLOCK_IN" | "CLOCK_OUT";
   session: "AM" | "PM" | "OT";
   timestamp: string;
+  /** The shift's work day ("YYYY-MM-DD"); differs from the calendar date for night shifts. */
+  work_date?: string;
+  /** Scheduled start of the shift ("HH:MM"), when known. */
+  scheduled_start?: string | null;
+  scheduled_end?: string | null;
   local_time?: string;
   is_late?: boolean;
   late_minutes?: number | null;
@@ -141,6 +147,13 @@ export interface DailyRow {
   late: boolean;
   open: boolean;
   events: number;
+  /** Work day the row belongs to (the date the shift started); same as `date`. */
+  work_date?: string;
+  scheduled_start?: string | null;
+  scheduled_end?: string | null;
+  late_minutes?: number | null;
+  early_leave?: boolean;
+  early_minutes?: number | null;
 }
 
 export interface ScanSnapshot {

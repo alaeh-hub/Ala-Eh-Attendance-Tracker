@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 import struct
 import time
@@ -17,7 +18,7 @@ from app.vision.antispoof import default_threshold, get_antispoof, resolve_mode
 from app.vision.embedding import normalize
 from app.vision.enhance import enhance_for_embedding
 from app.vision.engines import pick_single_face
-from app.vision.liveness import frame_ear
+from app.vision.liveness import blink_candidate, frame_ear, get_eye_landmark_source
 from app.vision.matcher import classify_match
 from app.vision.pose import assess_pose
 from app.vision.quality import assess_quality
@@ -335,17 +336,84 @@ def face_present(image_bytes: bytes, zone=None) -> bool:
     return not (zone and too_small(zone, nearest.box, img_h))
 
 
+@dataclass
+class _Observation:
+    """One burst frame in which the kiosk face was found."""
+    index: int                 # position in the burst
+    image: np.ndarray
+    face: object               # app.vision.engines.Face
+    track: int                 # face-track id (continuity, see _same_track)
+    ear: tuple | None          # (left, right) eye aspect ratio, None if landmarks failed
+    quality: float | None      # quality score, None when the frame failed the quality gate
+
+
+# Two consecutive face boxes belong to the same physical face only if they
+# overlap this much and are about the same size. Burst frames are ~120ms
+# apart: a person moving naturally keeps IoU well above 0.5, whereas a photo
+# or phone swapped in for another face jumps or changes scale.
+TRACK_MIN_IOU = 0.3
+TRACK_MAX_SIZE_RATIO = 1.4
+
+
+def _box_iou(a, b) -> float:
+    at, ar, ab, al = a
+    bt, br, bb, bl = b
+    iw = max(0, min(ar, br) - max(al, bl))
+    ih = max(0, min(ab, bb) - max(at, bt))
+    inter = iw * ih
+    union = max(0, ar - al) * max(0, ab - at) + max(0, br - bl) * max(0, bb - bt) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _same_track(previous_box, box, min_iou: float) -> bool:
+    if previous_box is None:
+        return False
+    ph, h = max(previous_box[2] - previous_box[0], 1), max(box[2] - box[0], 1)
+    pw, w = max(previous_box[1] - previous_box[3], 1), max(box[1] - box[3], 1)
+    if max(ph / h, h / ph, pw / w, w / pw) > TRACK_MAX_SIZE_RATIO:
+        return False
+    return _box_iou(previous_box, box) >= min_iou
+
+
+def _embed_frame(engine, cfg, obs: "_Observation"):
+    """Unit-length kiosk embedding for one frame, or None if the model rejects it."""
+    embedding = engine.embed(enhance_for_embedding(obs.image, obs.face.box, cfg["CLAHE_ENABLED"]), obs.face,
+                             num_jitters=engine.DEFAULTS.get("KIOSK_JITTERS", 1))
+    if embedding is None:
+        return None
+    embedding = np.asarray(embedding, dtype=np.float32)
+    if embedding.ndim != 1 or embedding.size == 0 or not np.all(np.isfinite(embedding)):
+        return None
+    norm = float(np.linalg.norm(embedding))
+    return embedding / norm if norm > 0 else None
+
+
 def recognize_burst(frames: list[bytes], zone=None) -> dict:
     """
     Recognises one person from a short burst of frames.
 
-    1. Every frame: fast detection + eye landmarks (for blink liveness).
-    2. The sharpest frames get an embedding; stops early once two frames
-       clearly agree, so the common case costs only two embeddings.
-    3. Embeddings are averaged (noise cancels, identity doesn't), outlier
+    1. Every frame: fast detection (or tracking) + eye landmarks (for blink
+       liveness). Each face is assigned to a face *track*: a face whose box
+       does not overlap the previous frame's face, changes size abruptly, or
+       follows a frame without a usable face starts a new track.
+    2. Only the track containing the best-quality frame is used, for BOTH
+       identity and liveness, so a blink cannot be borrowed from another face
+       shown in between (e.g. a photo of a coworker alternated with the
+       attacker's own blinking face).
+    3. The best frames of that track get an embedding; stops early once two
+       frames clearly agree, so the common case costs only two embeddings.
+    4. Embeddings are averaged (noise cancels, identity doesn't), outlier
        frames are dropped, and the average is matched against the index.
-    4. Each frame also votes; the match is only accepted if enough
+       Each frame also votes; the match is only accepted if enough
        individual frames agree on the same person.
+    5. On a match, the burst's most closed-eye frame (if any) is embedded and
+       must still look like the matched person (LIVENESS_VERIFY_BLINK_FRAME);
+       otherwise the burst's EARs are discarded so it cannot satisfy liveness.
+    6. Passive anti-spoof scores up to SPOOF_CHECK_FRAMES embedded frames and
+       keeps the most suspicious reading.
+
+    Cost: at most RECOGNITION_MAX_EMBED_FRAMES (3) embeddings for identity,
+    plus at most 2 for the blink check, and only when a blink candidate exists.
 
     With a `zone` (the kiosk's guide oval, see app.vision.zone) faces outside
     it are ignored and a face that is too small for it is asked to come closer.
@@ -353,17 +421,20 @@ def recognize_burst(frames: list[bytes], zone=None) -> dict:
     cfg = current_app.config
     engine = active_engine()
     started = time.perf_counter()
+    min_iou = float(cfg.get("LIVENESS_TRACK_MIN_IOU", TRACK_MIN_IOU))
+    landmark_source = get_eye_landmark_source(cfg.get("LIVENESS_LANDMARK_MODEL"))
 
-    detected = []  # (image, face, quality score)
-    ears = []
-    face_count = 0
+    observations: list[_Observation] = []
     last_reason = "No frames processed."
     quality_reason = None
-    previous = None
-    for raw in frames:
+    previous = None      # face to track from (detector hint)
+    track_box = None     # last face box of the current track; None = the track was broken
+    track_id = -1
+    for index, raw in enumerate(frames):
         try:
             image = decode_image(raw)
         except AppError:
+            track_box = None
             continue
         img_h, img_w = image.shape[:2]
         face = engine.track(image, previous, cfg["DETECTION_WIDTH"]) if previous else None
@@ -374,59 +445,70 @@ def recognize_burst(frames: list[bytes], zone=None) -> dict:
             if zone:
                 inside = faces_in_zone(zone, candidates, img_w, img_h)
                 if candidates and not inside:
-                    last_reason, previous = MOVE_INTO_CIRCLE, None
+                    last_reason, previous, track_box = MOVE_INTO_CIRCLE, None, None
                     continue
                 candidates = inside
             face, err = pick_single_face(candidates, allow_dominant=True)
             if err:
-                last_reason, previous = err, None
+                last_reason, previous, track_box = err, None, None
                 continue
             if zone and too_small(zone, face.box, img_h):
-                last_reason, previous = MOVE_CLOSER, None
+                last_reason, previous, track_box = MOVE_CLOSER, None, None
                 continue
         previous = face
-        face_count += 1
+        if not _same_track(track_box, face.box, min_iou):
+            track_id += 1
+        track_box = face.box
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        ear = frame_ear(gray, face.landmark_rect())
-        if ear is not None:
-            ears.append(ear)
+        ear = frame_ear(gray, face.landmark_rect(), source=landmark_source)
         quality = assess_quality(image, face.box)
         if not quality["ok"]:
             quality_reason = quality["reason"]
-            continue
-        detected.append((image, face, quality["score"]))
+        observations.append(_Observation(index, image, face, track_id, ear,
+                                         quality["score"] if quality["ok"] else None))
 
-    if not detected:
+    face_count = len(observations)
+    usable = [o for o in observations if o.quality is not None]
+    if not usable:
+        # No identity, so no EARs either: liveness samples are only ever
+        # pooled for the person they were measured on.
         if quality_reason:
             return {"status": "LOW_CONFIDENCE", "reason": quality_reason, "score": 0.0,
-                    "ears": ears, "frames_with_face": face_count,
+                    "ears": [], "frames_with_face": face_count,
                     "frames_embedded": 0, "vote_ratio": 0.0, "engine": engine.name,
                     "elapsed_ms": _ms(started)}
         return {"status": "NO_FACE", "reason": last_reason, "ears": [], "frames_with_face": 0,
                 "elapsed_ms": _ms(started)}
 
+    # The identity track is the one holding the best frame; every other track
+    # is discarded for identity and liveness alike.
+    identity_track = max(usable, key=lambda o: o.quality).track
+    track_obs = [o for o in observations if o.track == identity_track]
+    discarded = face_count - len(track_obs)
+    if discarded:
+        logger.warning("recognition burst: %d face track(s); kept track %d (%d frames), discarded %d frame(s) "
+                       "from other tracks", track_id + 1, identity_track, len(track_obs), discarded)
+
     # Match only frames that pass the same size, blur and lighting gate used
     # by enrollment; prefer the overall best image instead of sharpness alone.
-    best_frames = sorted(detected, key=lambda d: d[2], reverse=True)[: cfg["RECOGNITION_MAX_EMBED_FRAMES"]]
+    best_frames = sorted((o for o in track_obs if o.quality is not None),
+                         key=lambda o: o.quality, reverse=True)[: cfg["RECOGNITION_MAX_EMBED_FRAMES"]]
     threshold, margin = setting("FACE_MATCH_THRESHOLD"), setting("FACE_AMBIGUITY_MARGIN")
     band, early_exit = engine.DEFAULTS["LOW_CONFIDENCE_BAND"], engine.DEFAULTS["EARLY_EXIT_MARGIN"]
 
+    embedded: dict = {}   # frame index -> embedding (or None when the model rejected it)
     embeddings = []
+    embedded_obs = []
     result = None
     vote_ratio = 0.0
     used = 0
-    for image, face, _ in best_frames:
-        embedding = engine.embed(enhance_for_embedding(image, face.box, cfg["CLAHE_ENABLED"]), face,
-                                 num_jitters=engine.DEFAULTS.get("KIOSK_JITTERS", 1))
+    for obs in best_frames:
+        embedding = _embed_frame(engine, cfg, obs)
+        embedded[obs.index] = embedding
         if embedding is None:
             continue
-        embedding = np.asarray(embedding, dtype=np.float32)
-        if embedding.ndim != 1 or embedding.size == 0 or not np.all(np.isfinite(embedding)):
-            continue
-        norm = np.linalg.norm(embedding)
-        if norm == 0:
-            continue
-        embeddings.append(embedding / norm)
+        embeddings.append(embedding)
+        embedded_obs.append(obs)
         if len(embeddings) < min(2, len(best_frames)):
             continue
         result, vote_ratio, used = _decide(embeddings, threshold, margin, band,
@@ -435,12 +517,13 @@ def recognize_burst(frames: list[bytes], zone=None) -> dict:
         clear_stranger = result["status"] == "NO_MATCH" and result["score"] < threshold - 2 * band
         if clear_match or clear_stranger:
             break
+    embed_calls = len(embedded)
 
     if not embeddings:
         return {"status": "LOW_CONFIDENCE", "reason": "Could not generate a valid face embedding.",
-                "score": 0.0, "ears": ears, "frames_with_face": face_count,
-                "frames_embedded": 0, "vote_ratio": 0.0, "engine": engine.name,
-                "elapsed_ms": _ms(started)}
+                "score": 0.0, "ears": [], "frames_with_face": face_count,
+                "frames_embedded": 0, "embeddings_computed": embed_calls, "vote_ratio": 0.0,
+                "engine": engine.name, "elapsed_ms": _ms(started)}
 
     # A burst may contain only one usable embedding when another frame is
     # blurry or the model rejects it. Still classify the usable sample rather
@@ -450,14 +533,30 @@ def recognize_burst(frames: list[bytes], zone=None) -> dict:
         result, vote_ratio, used = _decide(embeddings, threshold, margin, band,
                                            cfg["RECOGNITION_MIN_VOTE_RATIO"], engine.DEFAULTS["OUTLIER_SIMILARITY"])
 
-    best_image, best_face, _ = best_frames[0]
-    result.update(_spoof_check(cfg, best_image, best_face))
+    ear_obs = [o for o in track_obs if o.ear is not None]
+    ears = [o.ear for o in ear_obs]
+    mismatch = False
+    if (result["status"] == "MATCHED" and cfg.get("LIVENESS_REQUIRED", True)
+            and cfg.get("LIVENESS_VERIFY_BLINK_FRAME", True)):
+        verdict, extra_calls = _verify_blink_frame(
+            engine, cfg, ear_obs, embedded, result["user_id"], threshold, margin, band,
+            float(cfg.get("LIVENESS_EAR_BLINK_DELTA", 0.06)))
+        embed_calls += extra_calls
+        if verdict != "ok":
+            ears = []
+            mismatch = verdict == "mismatch"
+
+    spoof_count = max(1, int(cfg.get("SPOOF_CHECK_FRAMES", 3) or 1))
+    result.update(_spoof_check(cfg, [(o.image, o.face) for o in embedded_obs[:spoof_count]]))
     if cfg["SNAPSHOTS_ENABLED"]:
-        result["snapshot_jpeg"] = _snapshot_jpeg(best_image)
+        result["snapshot_jpeg"] = _snapshot_jpeg(best_frames[0].image)
     result.update({
         "ears": ears,
+        "liveness_identity_mismatch": mismatch,
         "frames_with_face": face_count,
+        "frames_discarded_other_tracks": discarded,
         "frames_embedded": used,
+        "embeddings_computed": embed_calls,
         "vote_ratio": round(vote_ratio, 3),
         "engine": engine.name,
         "elapsed_ms": _ms(started),
@@ -465,19 +564,73 @@ def recognize_burst(frames: list[bytes], zone=None) -> dict:
     return result
 
 
-def _spoof_check(cfg, image, face) -> dict:
-    """Passive anti-spoof reading for the best frame; never raises into a check-in."""
+def _verify_blink_frame(engine, cfg, ear_obs: list, embedded: dict, user_id, threshold: float,
+                        margin: float, band: float, blink_delta: float) -> tuple[str, int]:
+    """
+    Confirm the burst's closed-eye frame shows the matched person.
+
+    Returns (verdict, embeddings computed) where verdict is "ok" (no blink
+    candidate, or it matches), "mismatch" (it shows someone else) or
+    "unverified" (it could not be embedded). The closed-eye frame is held to
+    a lenient bar (threshold - 2 * band) because closed eyes lower the score;
+    an adjacent open-eye frame that was not already embedded for identity
+    must reach the normal per-frame vote bar (threshold - band).
+    """
+    candidate = blink_candidate([o.ear for o in ear_obs], blink_delta)
+    if candidate is None:
+        return "ok", 0
+    closed = ear_obs[candidate]
+    calls = 0
+
+    checks = [(closed, threshold - 2 * band, "closed-eye")]
+    neighbours = [ear_obs[i] for i in (candidate - 1, candidate + 1)
+                  if 0 <= i < len(ear_obs) and ear_obs[i].index not in embedded]
+    if neighbours:
+        # The more open of the frames just before/after the blink.
+        checks.append((max(neighbours, key=lambda o: float(np.mean(o.ear))), threshold - band, "adjacent open-eye"))
+
+    for obs, floor, label in checks:
+        if obs.index not in embedded:
+            calls += 1
+            embedded[obs.index] = _embed_frame(engine, cfg, obs)
+        embedding = embedded[obs.index]
+        if embedding is None:
+            logger.warning("liveness: %s frame %d could not be embedded; ignoring this burst's blink samples",
+                           label, obs.index)
+            return "unverified", calls
+        ranked = embedding_index.rank(embedding)
+        user_score = dict(ranked).get(user_id)
+        top_user, top_score = ranked[0] if ranked else (None, 0.0)
+        ok = (user_score is not None and user_score >= floor
+              and (top_user == user_id or top_score - user_score < margin))
+        if not ok:
+            logger.warning(
+                "liveness identity mismatch: %s frame %d of the burst does not match user=%s "
+                "(score=%s floor=%.3f top_user=%s top_score=%.3f); blink samples discarded",
+                label, obs.index, user_id, None if user_score is None else round(user_score, 4),
+                floor, top_user, top_score)
+            return "mismatch", calls
+    return "ok", calls
+
+
+def _spoof_check(cfg, frames: list) -> dict:
+    """
+    Passive anti-spoof reading over the given [(image, face)] frames. The most
+    suspicious (lowest) score wins, so one replayed frame flags the burst.
+    Never raises into a check-in.
+    """
     try:
         spoof = get_antispoof()
         mode = resolve_mode(cfg["SPOOF_MODE"], spoof.has_model)
-        if mode == "off":
+        if mode == "off" or not frames:
             return {"spoof_score": None, "spoof_suspected": False}
-        reading = spoof.score(image, face.box)
+        readings = [spoof.score(image, face.box) for image, face in frames]
+        reading = min(readings, key=lambda r: r["score"])
         threshold = cfg["SPOOF_THRESHOLD"] if cfg["SPOOF_THRESHOLD"] is not None else default_threshold(reading["method"])
         suspected = reading["score"] < threshold
         if suspected:
-            logger.warning("anti-spoof flagged score=%s method=%s threshold=%s mode=%s",
-                           reading["score"], reading["method"], threshold, mode)
+            logger.warning("anti-spoof flagged score=%s method=%s threshold=%s mode=%s frame_scores=%s",
+                           reading["score"], reading["method"], threshold, mode, [r["score"] for r in readings])
         return {"spoof_score": reading["score"], "spoof_suspected": suspected and mode == "enforce"}
     except Exception:  # noqa: BLE001 - a broken optional check must not block attendance
         logger.exception("anti-spoof check failed")

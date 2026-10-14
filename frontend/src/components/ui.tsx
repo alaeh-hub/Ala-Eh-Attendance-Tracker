@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { ReactNode, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import api from "../services/api";
 import Icon, { IconName } from "./Icon";
@@ -56,28 +56,60 @@ export function initials(name?: string | null) {
     .join("");
 }
 
-// Photos need the auth header, so they're fetched as blobs and cached per session.
+// Photos need the auth header, so they're fetched as blobs and cached per
+// session as object URLs. The cache is an LRU (Map keeps insertion order;
+// a hit is moved to the end) so a long-running kiosk doesn't grow forever.
+const PHOTO_CACHE_LIMIT = 200;
 const photoCache = new Map<string, Promise<string | null>>();
 
+function revokeWhenReady(entry: Promise<string | null> | undefined) {
+  entry?.then((url) => url && URL.revokeObjectURL(url)).catch(() => undefined);
+}
+
 export function forgetPhoto(userId: string) {
+  revokeWhenReady(photoCache.get(userId));
   photoCache.delete(userId);
 }
 
+/** Drops every cached photo (called on sign-out so the next user can't see them). */
+export function clearPhotoCache() {
+  photoCache.forEach((entry) => revokeWhenReady(entry));
+  photoCache.clear();
+}
+
+/** Number of cached photos (for tests). */
+export function photoCacheSize() {
+  return photoCache.size;
+}
+
 function loadPhoto(userId: string) {
-  if (!photoCache.has(userId)) {
-    photoCache.set(
-      userId,
-      api
-        .get(`/users/${userId}/photo`, { responseType: "blob" })
-        .then((res) => URL.createObjectURL(res.data))
-        .catch(() => {
-          // Don't cache failures, so a transient error doesn't hide the photo for the whole session.
-          photoCache.delete(userId);
-          return null;
-        })
-    );
+  const hit = photoCache.get(userId);
+  if (hit) {
+    photoCache.delete(userId);
+    photoCache.set(userId, hit);
+    return hit;
   }
-  return photoCache.get(userId)!;
+  const entry: Promise<string | null> = api
+    .get(`/users/${userId}/photo`, { responseType: "blob" })
+    .then((res) => {
+      const url = URL.createObjectURL(res.data);
+      // Evicted (or forgotten) while loading: don't leak the URL.
+      if (photoCache.get(userId) !== entry) {
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+      }
+      return url;
+    })
+    .catch(() => {
+      // Don't cache failures, so a transient error doesn't hide the photo for the whole session.
+      if (photoCache.get(userId) === entry) photoCache.delete(userId);
+      return null;
+    });
+  photoCache.set(userId, entry);
+  while (photoCache.size > PHOTO_CACHE_LIMIT) {
+    const oldest = photoCache.keys().next().value as string;
+    forgetPhoto(oldest);
+  }
+  return entry;
 }
 
 export function Avatar({
@@ -192,6 +224,8 @@ export function EmptyState({ icon, title, message, action }: { icon: IconName; t
   );
 }
 
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export function Modal({
   open,
   onClose,
@@ -207,20 +241,69 @@ export function Modal({
   footer?: ReactNode;
   wide?: boolean;
 }) {
+  const titleId = useId();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  // Focus moves into the dialog on open, Tab cycles inside it, Escape closes
+  // it, and focus returns to whatever opened it on close.
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+    const previous = document.activeElement as HTMLElement | null;
+    const panel = panelRef.current;
+    const focusables = () => (panel ? Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)) : []);
+    // Respect an autoFocus inside the dialog; otherwise focus the first control.
+    if (panel && !panel.contains(document.activeElement)) (focusables()[0] ?? panel).focus();
+
+    const onKey = (e: KeyboardEvent) => {
+      // With a dialog stacked on top of this one, only the topmost reacts.
+      const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
+      if (panel && dialogs.length > 1 && dialogs[dialogs.length - 1] !== panel) return;
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onCloseRef.current();
+        return;
+      }
+      if (e.key !== "Tab" || !panel) return;
+      const items = focusables();
+      if (items.length === 0) {
+        e.preventDefault();
+        panel.focus();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || !panel.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (active === last || !panel.contains(active))) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      if (previous && document.contains(previous)) previous.focus();
+    };
+  }, [open]);
 
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label={title}>
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm animate-fade-in" onClick={onClose} />
-      <div className={`card relative max-h-[92vh] w-full overflow-y-auto rounded-b-none border-white/10 bg-ink-850 animate-scale-in sm:rounded-2xl ${wide ? "sm:max-w-2xl" : "sm:max-w-md"}`}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm animate-fade-in" onClick={onClose} aria-hidden="true" />
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className={`card relative max-h-[92vh] w-full overflow-y-auto rounded-b-none border-white/10 bg-ink-850 outline-none animate-scale-in sm:rounded-2xl ${wide ? "sm:max-w-2xl" : "sm:max-w-md"}`}
+      >
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.06] bg-ink-850/95 px-6 py-4 backdrop-blur">
-          <h2 className="text-lg font-bold text-white">{title}</h2>
+          <h2 id={titleId} className="text-lg font-bold text-white">{title}</h2>
           <button onClick={onClose} className="rounded-lg p-1.5 text-neutral-400 hover:bg-white/10 hover:text-white" aria-label="Close">
             <Icon name="close" className="h-5 w-5" />
           </button>
@@ -278,6 +361,7 @@ const ROLE_STYLES: Record<string, string> = {
   ADMIN: "bg-brand-500/15 text-brand-300 ring-1 ring-brand-500/30",
   OPERATOR: "bg-sky-500/10 text-sky-300 ring-1 ring-sky-500/25",
   STAFF: "bg-white/[0.06] text-neutral-300 ring-1 ring-white/10",
+  KIOSK: "bg-violet-500/10 text-violet-300 ring-1 ring-violet-500/25",
 };
 
 export function RoleBadge({ role }: { role: string }) {
@@ -352,15 +436,8 @@ export function Field({ label, children, hint, error }: { label: string; childre
   );
 }
 
-export function formatTime(iso: string | null | undefined) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
-export function formatDateTime(iso: string) {
-  const d = new Date(iso);
-  return d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
+// Times are shown in the organisation's timezone, not the browser's (see utils/orgTime).
+export { formatDateTime, formatTime } from "../utils/orgTime";
 
 export function timeAgo(iso: string) {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);

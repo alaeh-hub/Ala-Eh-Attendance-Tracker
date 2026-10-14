@@ -7,6 +7,7 @@ import type { Role } from "../types";
 import Icon, { IconName } from "./Icon";
 import IdleScreen from "./IdleScreen";
 import { Avatar, RoleBadge } from "./ui";
+import { formatDate, formatTime, orgNow, useOrgStore } from "../utils/orgTime";
 
 const IDLE_TIMEOUT_MS = 60_000;
 
@@ -28,9 +29,9 @@ export const NAV: NavItem[] = [
   { to: "/records", label: "Records", icon: "records", roles: ["ADMIN", "OPERATOR", "STAFF"] },
 ];
 
-// Admins land on the portal dashboard, kiosk operators on the kiosk, staff on their own records.
+// Admins land on the portal dashboard, kiosk operators and kiosk device accounts on the kiosk, staff on their own records.
 export function homeFor(role?: Role) {
-  return role === "STAFF" ? "/records" : role === "OPERATOR" ? "/kiosk" : "/admin";
+  return role === "STAFF" ? "/records" : role === "OPERATOR" || role === "KIOSK" ? "/kiosk" : "/admin";
 }
 
 function Brand({ compact = false }: { compact?: boolean }) {
@@ -115,7 +116,7 @@ function UserCard() {
           <RoleBadge role={user.role} />
         </div>
         <button
-          onClick={logout}
+          onClick={() => void logout()}
           className="rounded-lg p-2 text-neutral-500 transition-all duration-200 hover:bg-red-500/10 hover:text-red-300 active:scale-[.92]"
           title="Log out"
           aria-label="Log out"
@@ -128,15 +129,16 @@ function UserCard() {
 }
 
 function Clock() {
-  const [now, setNow] = useState(new Date());
+  const [now, setNow] = useState(orgNow);
+  useOrgStore((s) => s.timeZone); // re-render when the org timezone arrives
   useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000 * 15);
+    const t = setInterval(() => setNow(orgNow()), 1000 * 15);
     return () => clearInterval(t);
   }, []);
   return (
     <div className="px-1 text-xs text-neutral-500">
-      <p className="font-semibold text-neutral-300">{now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}</p>
-      <p>{now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</p>
+      <p className="font-semibold text-neutral-300">{formatDate(now, { weekday: "long", month: "long", day: "numeric" })}</p>
+      <p>{formatTime(now.toISOString())}</p>
     </div>
   );
 }
@@ -145,6 +147,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const location = useLocation();
   useEffect(() => setOpen(false), [location.pathname]);
+  const finishLeavingKiosk = useAuthStore((s) => s.finishLeavingKiosk);
+  useEffect(() => finishLeavingKiosk(), [finishLeavingKiosk]);
 
   // The kiosk's whole job is to sit idle waiting for the next scan — a
   // screensaver popping up over the camera would break it. Every other

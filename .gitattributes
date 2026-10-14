@@ -1,0 +1,5 @@
+# Shell scripts run inside Linux containers: never let Windows checkouts
+# convert them to CRLF (the shebang line breaks with "\r").
+*.sh text eol=lf
+deploy/Caddyfile text eol=lf
+frontend/nginx.conf text eol=lf

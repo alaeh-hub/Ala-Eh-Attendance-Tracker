@@ -59,7 +59,7 @@ class CheckInWiringTests(BaseAppTest):
         data = {"frames": [(jpeg(), "f0.jpg")], "device_id": "kiosk-1"}
         if zone is not None:
             data["zone"] = zone
-        return self.client.post("/api/recognition/check-in", headers=self.auth(), data=data, content_type="multipart/form-data")
+        return self.client.post("/api/recognition/check-in", headers=self.kiosk_auth(), data=data, content_type="multipart/form-data")
 
     def test_zone_is_passed_to_the_scanner(self):
         burst = {"status": "NO_FACE", "reason": "Move into the circle.", "ears": [], "frames_with_face": 0, "elapsed_ms": 1}

@@ -3,8 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthStore } from "../../stores/authStore";
+import { useToastStore } from "../../stores/toastStore";
 import { admin, juan, maria } from "../../test/fixtures";
 import Employees from "./Employees";
+
+function lastToast() {
+  const toasts = useToastStore.getState().toasts;
+  return toasts[toasts.length - 1];
+}
 
 const { get, post, patch, del } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), patch: vi.fn(), del: vi.fn() }));
 vi.mock("../../services/api", () => ({
@@ -53,7 +59,7 @@ describe("Employees page", () => {
   it("clears all data only after the password and DELETE are entered", async () => {
     setup();
     post.mockResolvedValue({
-      data: { users_removed: 2, face_samples: 12, review_snapshots: 3, attendance_events: 40, audit_entries: 9, kept: { admins: 1, operators: 0, departments: 2 } },
+      data: { users_removed: 2, face_samples: 12, review_snapshots: 3, attendance_events: 40, kept: { admins: 1, operators: 0, kiosks: 0, departments: 2 } },
     });
     await screen.findByText("Maria Santos");
 
@@ -86,11 +92,11 @@ describe("Employees page", () => {
 
   it("can also remove operator accounts when asked", async () => {
     setup();
-    post.mockResolvedValue({ data: { users_removed: 3, face_samples: 0, review_snapshots: 0, attendance_events: 0, audit_entries: 0, kept: { admins: 1, operators: 0, departments: 0 } } });
+    post.mockResolvedValue({ data: { users_removed: 3, face_samples: 0, review_snapshots: 0, attendance_events: 0, kept: { admins: 1, operators: 0, kiosks: 0, departments: 0 } } });
     await screen.findByText("Maria Santos");
     await userEvent.click(screen.getByRole("button", { name: /Clear all data/ }));
     const dialog = await screen.findByRole("dialog");
-    await userEvent.click(within(dialog).getByLabelText("Also delete operator accounts"));
+    await userEvent.click(within(dialog).getByLabelText("Also delete operator and kiosk device accounts"));
     await userEvent.type(within(dialog).getByLabelText("Your password"), "secret-pass");
     await userEvent.type(within(dialog).getByPlaceholderText("DELETE"), "DELETE");
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete everything" }));
@@ -126,15 +132,70 @@ describe("Employees page", () => {
     expect(screen.queryByRole("button", { name: /Clear all data/ })).not.toBeInTheDocument();
   });
 
-  it("asks before deleting an employee", async () => {
+  it("asks before deleting an employee and explains archiving", async () => {
     setup();
-    del.mockResolvedValue({ data: {} });
+    del.mockResolvedValue({ data: { deleted: true, archived: false, id: maria.id } });
     await screen.findByText("Maria Santos");
-    const row = screen.getByText("Maria Santos").closest("tr")!;
-    await userEvent.click(within(row).getByTitle("Delete"));
-    expect(await screen.findByText(/permanently deletes/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Delete Maria Santos" }));
+    expect(await screen.findByText(/attendance records are kept for payroll/)).toBeInTheDocument();
     expect(del).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete employee" }));
     await waitFor(() => expect(del).toHaveBeenCalledWith(`/users/${maria.id}`));
+    await waitFor(() => expect(screen.queryByText("Maria Santos")).not.toBeInTheDocument());
+    expect(lastToast()?.title).toBe("Employee deleted");
+  });
+
+  it("keeps an archived employee in the list as deactivated and says so", async () => {
+    setup();
+    del.mockResolvedValue({ data: { deleted: false, archived: true, id: maria.id } });
+    await screen.findByText("Maria Santos");
+    await userEvent.click(screen.getByRole("button", { name: "Delete Maria Santos" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Delete employee" }));
+    await waitFor(() => expect(lastToast()?.title).toBe("Employee archived"));
+    const row = screen.getByText("Maria Santos").closest("tr")!;
+    expect(within(row).getByText("Deactivated")).toBeInTheDocument();
+    expect(within(row).getByText("Not enrolled — enroll")).toBeInTheDocument();
+  });
+
+  it("saves a role change and its password in ONE request", async () => {
+    setup();
+    patch.mockResolvedValue({ data: { ...juan, role: "OPERATOR", can_login: true } });
+    await screen.findByText("Juan Dela Cruz");
+    await userEvent.click(screen.getByRole("button", { name: "Edit Juan Dela Cruz" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.selectOptions(within(dialog).getByLabelText(/^Role/), "OPERATOR");
+    await userEvent.type(within(dialog).getByLabelText(/password/i), "longenough1");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(patch).toHaveBeenCalledWith(`/users/${juan.id}`, { role: "OPERATOR", password: "longenough1" });
+  });
+
+  it("requires a password before turning a staff member into a kiosk device account", async () => {
+    setup();
+    await screen.findByText("Juan Dela Cruz");
+    await userEvent.click(screen.getByRole("button", { name: "Edit Juan Dela Cruz" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.selectOptions(within(dialog).getByLabelText(/^Role/), "KIOSK");
+    expect(within(dialog).getByText(/can only run the attendance kiosk/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    expect(await within(dialog).findByText(/needs a password/)).toBeInTheDocument();
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it("pages a long employee list", async () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({ ...maria, id: `u-${i}`, full_name: `Person ${String(i).padStart(2, "0")}`, email: `p${i}@example.test` }));
+    useAuthStore.setState({ user: admin });
+    get.mockImplementation((url: string) => Promise.resolve({ data: url === "/users" ? many : [] }));
+    render(
+      <MemoryRouter>
+        <Employees />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Person 00")).toBeInTheDocument();
+    expect(screen.queryByText("Person 55")).not.toBeInTheDocument();
+    expect(screen.getByText(/of/, { selector: "p" })).toHaveTextContent("Showing 1–50 of 60 employees");
+    await userEvent.click(screen.getByRole("button", { name: "Next page" }));
+    expect(screen.getByText("Person 55")).toBeInTheDocument();
+    expect(screen.queryByText("Person 00")).not.toBeInTheDocument();
   });
 });

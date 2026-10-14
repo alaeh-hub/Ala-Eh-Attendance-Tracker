@@ -50,6 +50,14 @@ class EndToEndTests(BaseAppTest):
         g.pop("current_user", None)
         return {"Authorization": f"Bearer {res.json['access_token']}"}
 
+    def open_kiosk(self):
+        """A separate browser (the tablet) signs in and locks itself to the kiosk."""
+        login = self.login_admin()
+        res = self.client.post("/api/auth/kiosk/lock", headers=login)
+        self.assertEqual(res.status_code, 200, res.json)
+        self.assertTrue(res.json["kiosk_locked"])
+        return {"Authorization": f"Bearer {res.json['access_token']}"}
+
     def see_person(self, base, jitter=0.01):
         self.current_face = unit(base + self.rng.normal(scale=jitter, size=128))
 
@@ -99,9 +107,14 @@ class EndToEndTests(BaseAppTest):
         self.assertEqual(dup.status_code, 409)
         self.assertEqual(dup.json["code"], "DUPLICATE_FACE")
 
-        # 4. Kiosk: Maria is recognised, blinks, and is clocked in.
+        # 4. Kiosk: Maria is recognised, blinks, and is clocked in. The
+        #    admin's ordinary portal session can't punch; a locked kiosk can.
+        self.assertEqual(self.scan(admin).json["code"], "KIOSK_REQUIRED")
+        kiosk = self.open_kiosk()
+        g.pop("current_user", None)
+        self.assertEqual(self.client.get("/api/reports/today", headers=kiosk).json["code"], "KIOSK_LOCKED")
         self.see_person(maria_face, jitter=0.02)
-        first = self.scan(admin)
+        first = self.scan(kiosk)
         self.assertEqual(first.status_code, 201, first.json)
         self.assertEqual(first.json["status"], "MATCHED")
         self.assertEqual(first.json["event"]["user_name"], "Maria Santos")
@@ -109,7 +122,7 @@ class EndToEndTests(BaseAppTest):
         self.assertGreater(first.json["score"], 0.9)
 
         # 5. An immediate second scan only re-confirms, it never double-punches.
-        again = self.scan(admin)
+        again = self.scan(kiosk)
         self.assertEqual(again.json["status"], "COOLDOWN")
         self.assertEqual(AttendanceEvent.query.filter_by(user_id=maria["id"]).count(), 1)
 
@@ -141,7 +154,7 @@ class EndToEndTests(BaseAppTest):
         self.assertEqual(pdf.mimetype, "application/pdf")
         self.assertTrue(pdf.data.startswith(b"%PDF"))
 
-        # The kiosk's "back to admin" prompt re-checks the signed-in user's password.
+        # Re-checking the signed-in user's password (kept for sensitive actions).
         g.pop("current_user", None)
         ok = self.client.post("/api/auth/verify-password", json={"password": "test-password"}, headers=admin)
         self.assertEqual(ok.status_code, 200)
@@ -151,7 +164,7 @@ class EndToEndTests(BaseAppTest):
 
         # 8. A stranger is refused, queued for review, and never punched.
         self.see_person(unit(self.rng.normal(size=128)))
-        stranger = self.scan(admin, device="kiosk-2")
+        stranger = self.scan(kiosk, device="kiosk-2")
         self.assertEqual(stranger.json["status"], "NO_MATCH")
         self.assertEqual(AttendanceEvent.query.count(), 1)
         g.pop("current_user", None)
@@ -171,7 +184,7 @@ class EndToEndTests(BaseAppTest):
         self.assertEqual(AttendanceEvent.query.filter_by(user_id=maria["id"]).count(), 1)
         snapshot_service._throttle.clear()
         self.see_person(maria_face)
-        self.assertEqual(self.scan(admin).json["status"], "NO_MATCH")
+        self.assertEqual(self.scan(kiosk).json["status"], "NO_MATCH")
 
         # 10. Everything above left an audit trail.
         from app.models.audit_log import AuditLog

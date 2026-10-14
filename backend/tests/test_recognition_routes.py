@@ -19,6 +19,7 @@ from app.services.embedding_index import active_engine, embedding_index
 from app.vision.engines import Face
 from app.vision.liveness import LivenessTracker, evaluate_blink
 from app.vision.matcher import classify_match, rank_users
+from app.utils.ratelimit import reset_rate_limits
 from app.utils.security import hash_password
 from config import Config
 
@@ -49,6 +50,7 @@ class TestConfig(Config):
 
 class BaseAppTest(unittest.TestCase):
     def setUp(self):
+        reset_rate_limits()  # the limiter is process-wide; start every test with a clean slate
         self.app = create_app(TestConfig)
         self.ctx = self.app.app_context()
         self.ctx.push()
@@ -79,8 +81,16 @@ class BaseAppTest(unittest.TestCase):
         db.drop_all()
         self.ctx.pop()
 
-    def auth(self, user_id=None):
-        return {"Authorization": f"Bearer {create_access_token(identity=user_id or self.admin_id)}"}
+    def auth(self, user_id=None, kiosk=False):
+        """Bearer header for a session of `user_id` (default: the admin), carrying
+        the user's current token_version like a real login would."""
+        user = db.session.get(User, user_id or self.admin_id)
+        claims = {"tv": user.token_version or 0, "kiosk": kiosk}
+        return {"Authorization": f"Bearer {create_access_token(identity=user.id, additional_claims=claims)}"}
+
+    def kiosk_auth(self, user_id=None):
+        """A kiosk-locked session, which check-in requires."""
+        return self.auth(user_id, kiosk=True)
 
 
 class MatcherTests(unittest.TestCase):
@@ -139,7 +149,7 @@ class CheckInRouteTests(BaseAppTest):
     def _post(self, frames=3):
         return self.client.post(
             "/api/recognition/check-in",
-            headers=self.auth(),
+            headers=self.kiosk_auth(),
             data={"frames": [(jpeg(), f"f{i}.jpg") for i in range(frames)], "device_id": "kiosk-1"},
             content_type="multipart/form-data",
         )
@@ -175,6 +185,18 @@ class CheckInRouteTests(BaseAppTest):
             res = self._post()
         self.assertEqual(res.json["status"], "LIVENESS_FAILED")
         self.assertEqual(res.json["first_name"], "Juan")
+        self.assertEqual(AttendanceEvent.query.count(), 0)
+
+    def test_borrowed_blink_discards_pooled_samples(self):
+        # Scan 1 pools open-open-closed (no blink yet); scan 2 is flagged as a
+        # borrowed blink; scan 3's open frames would complete the pooled blink
+        # if the tainted samples had survived.
+        first = self._fake_burst([(0.30, 0.31), (0.31, 0.30), (0.14, 0.13)])
+        mismatch = {**self._fake_burst([]), "liveness_identity_mismatch": True}
+        last = self._fake_burst([(0.31, 0.31), (0.30, 0.30)])
+        with mock.patch("app.api.recognition_routes.recognize_burst", side_effect=[first, mismatch, last]):
+            responses = [self._post() for _ in range(3)]
+        self.assertEqual([r.json["status"] for r in responses], ["LIVENESS_FAILED"] * 3)
         self.assertEqual(AttendanceEvent.query.count(), 0)
 
     def test_first_scan_of_new_day_is_clock_in(self):

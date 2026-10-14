@@ -2,18 +2,27 @@ import csv
 import io
 import re
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import func
 
-from app.api.attendance_routes import filtered_events_query, parse_day
+from app.api.attendance_routes import filtered_events_query, parse_day, parse_page_args
 from app.extensions import db
 from app.middleware.error_handler import AppError
 from app.models.attendance_event import AttendanceEvent
 from app.models.audit_log import AuditLog
 from app.models.face_embedding import FaceEmbedding
 from app.models.user import User
-from app.services.attendance_service import department_break_times, is_late
+from app.services.attendance_service import (
+    REGULAR_SESSIONS,
+    departments_by_name,
+    early_minutes,
+    event_work_date,
+    event_work_day,
+    late_minutes,
+    schedule_work_day,
+    user_department,
+)
 from app.services.embedding_index import active_engine, model_filter
 from app.utils.auth import load_current_user, require_roles
 from app.utils.timezone import now_in_org_tz, org_day_bounds_utc, org_tz, to_org_tz, utcnow
@@ -29,69 +38,122 @@ def _spreadsheet_safe(value) -> str:
     return text
 
 
-def _break_overlap_seconds(local_start, local_end, break_start: str, break_end: str) -> float:
-    """Seconds of [local_start, local_end) that fall inside the department's
-    lunch window on local_start's calendar day. This is what makes the
-    12pm-1pm break "not included in the time of the employee" whether they
-    punch out for lunch (the gap between pairs already excludes it — this
-    returns 0 then) or stay clocked in straight through (this subtracts it
-    from that one long pair)."""
-    bh1, bm1 = (int(x) for x in break_start.split(":"))
-    bh2, bm2 = (int(x) for x in break_end.split(":"))
-    b_start = local_start.replace(hour=bh1, minute=bm1, second=0, microsecond=0)
-    b_end = local_start.replace(hour=bh2, minute=bm2, second=0, microsecond=0)
-    if b_end <= b_start:
+def _break_overlap_seconds(local_start, local_end, break_window) -> float:
+    """Seconds of [local_start, local_end) inside the work day's unpaid
+    break. `break_window` is the (start, end) org-local datetimes from
+    WorkDay.break_window, already anchored on the right calendar day, so a
+    02:00-03:00 break on a 22:00-06:00 shift is the NEXT morning's 02:00.
+    This is what keeps the break out of worked time whether the employee
+    punches out for it (the gap between pairs already excludes it; this
+    returns 0 then) or stays clocked in straight through (this subtracts
+    it from that one long pair)."""
+    if not break_window:
         return 0.0
+    b_start, b_end = break_window
     overlap_start, overlap_end = max(local_start, b_start), min(local_end, b_end)
     return max(0.0, (overlap_end - overlap_start).total_seconds())
 
 
-def _worked_seconds(events: list, dept_break: tuple[str, str], open_until=None) -> float:
+def _worked_seconds(events: list, break_window, open_until=None) -> float:
     """Sum of CLOCK_IN->CLOCK_OUT pairs (events sorted ascending), minus
-    any overlap each pair has with the lunch break window."""
+    any overlap each pair has with the work day's break window."""
     total, started = 0.0, None
     for e in events:
         if e.event_type == "CLOCK_IN" and started is None:
             started = e.timestamp
         elif e.event_type == "CLOCK_OUT" and started is not None:
-            total += _pair_seconds(started, e.timestamp, dept_break)
+            total += _pair_seconds(started, e.timestamp, break_window)
             started = None
     if started is not None and open_until is not None:
-        total += _pair_seconds(started, open_until, dept_break)
+        total += _pair_seconds(started, open_until, break_window)
     return total
 
 
-def _pair_seconds(start_utc, end_utc, dept_break: tuple[str, str]) -> float:
+def _pair_seconds(start_utc, end_utc, break_window) -> float:
     raw = (end_utc - start_utc).total_seconds()
     if raw <= 0:
         return 0.0
-    overlap = _break_overlap_seconds(to_org_tz(start_utc), to_org_tz(end_utc), *dept_break)
+    overlap = _break_overlap_seconds(to_org_tz(start_utc), to_org_tz(end_utc), break_window)
     return max(0.0, raw - overlap)
+
+
+def _chain_open(events: list) -> bool:
+    """Whether the regular chain or the OT chain ends on a time in."""
+    regular = [e for e in events if e.session in REGULAR_SESSIONS]
+    ot = [e for e in events if e.session not in REGULAR_SESSIONS]
+    return any(chain and chain[-1].event_type == "CLOCK_IN" for chain in (regular, ot))
+
+
+def _first_arrival(events: list):
+    """The work day's arrival punch: the first regular time in (an OT time
+    in before the shift is not the arrival), else the first time in."""
+    ins = [e for e in events if e.event_type == "CLOCK_IN"]
+    regular = [e for e in ins if e.session in REGULAR_SESSIONS]
+    return (regular or ins or [None])[0]
+
+
+def _day_late(events: list) -> int | None:
+    """Minutes late for this work day (None = on time / no schedule). The
+    stamped lateness lives on the first regular time in; legacy rows are
+    judged on that same punch."""
+    arrival = _first_arrival(events)
+    if arrival is None or arrival.session not in REGULAR_SESSIONS:
+        return None
+    return late_minutes(arrival)
 
 
 @report_bp.get("/today")
 @require_roles("ADMIN", "OPERATOR")
 def today():
+    """
+    Live headcount. present / late / currently-in are judged per employee
+    on their CURRENT work day, not the calendar day: a night worker who
+    timed in at 22:00 yesterday is "currently in" at 03:00 today, and still
+    counts as present after their 06:00 time out. The hourly chart and
+    events_today stay on the calendar day (they describe the clock).
+    """
+    now = utcnow()
+    now_local = to_org_tz(now)
     start, end = org_day_bounds_utc()
     active = User.query.filter(User.is_active.is_(True)).all()
+    active_ids = {u.id for u in active}
     enrolled_ids = {uid for (uid,) in db.session.query(FaceEmbedding.user_id)
                     .filter(model_filter(active_engine().name)).distinct().all()}
-    events = (
-        AttendanceEvent.query.filter(AttendanceEvent.timestamp >= start, AttendanceEvent.timestamp < end)
+
+    # Every work day that can contain "now" started less than 48h ago.
+    recent = (
+        AttendanceEvent.query.filter(AttendanceEvent.timestamp >= min(start, now - timedelta(hours=48)),
+                                     AttendanceEvent.timestamp < max(end, now + timedelta(minutes=1)))
         .order_by(AttendanceEvent.timestamp.asc())
         .all()
     )
-
     by_user = defaultdict(list)
-    for e in events:
-        by_user[e.user_id].append(e)
+    for e in recent:
+        if e.user_id in active_ids:
+            by_user[e.user_id].append(e)
 
-    active_ids = {u.id for u in active}
-    present = {uid for uid in by_user if uid in active_ids}
-    currently_in = {uid for uid, evs in by_user.items() if uid in active_ids and evs[-1].event_type == "CLOCK_IN"}
-    late = {uid for uid, evs in by_user.items() if uid in active_ids and evs[0].event_type == "CLOCK_IN" and is_late(evs[0])}
+    depts = departments_by_name()
+    users = {u.id: u for u in active}
+    present, currently_in, late = set(), set(), set()
+    for uid, evs in by_user.items():
+        user = users[uid]
+        dept = user_department(user, depts)
+        past = [e for e in evs if e.timestamp <= now] or evs
+        work_day = event_work_day(past[-1], dept)
+        if not work_day.contains(now_local):
+            work_day = schedule_work_day(user, now_local, dept)
+        day_events = [e for e in evs
+                      if event_work_date(e, dept) == work_day.work_date
+                      and work_day.contains(to_org_tz(e.timestamp))]
+        if not day_events:
+            continue
+        present.add(uid)
+        if _chain_open(day_events):
+            currently_in.add(uid)
+        if _day_late(day_events) is not None:
+            late.add(uid)
 
-    tz = org_tz()
+    events = [e for e in recent if start <= e.timestamp < end]
     hourly = {h: {"hour": h, "clock_in": 0, "clock_out": 0} for h in range(24)}
     for e in events:
         h = to_org_tz(e.timestamp).hour
@@ -104,8 +166,8 @@ def today():
         d["present"] += u.id in present
 
     return jsonify({
-        "date": now_in_org_tz().date().isoformat(),
-        "timezone": str(tz),
+        "date": now_local.date().isoformat(),
+        "timezone": str(org_tz()),
         "total_employees": len(active),
         "enrolled": len(active_ids & enrolled_ids),
         "present": len(present),
@@ -130,44 +192,69 @@ def _range_args():
 
 
 def _daily_rows(caller, start_day, end_day) -> list[dict]:
-    """Per-employee, per-day timesheet: first in, last out, hours worked, late flag."""
-    today_local = now_in_org_tz().date()
+    """
+    Per-employee, per-WORK-DAY timesheet: first in, last out, hours worked,
+    late flag. Rows are keyed by work_date (the date the shift started), so
+    a 22:00-06:00 shift is one row with ~7h, not two half-rows with 0h.
+    Events are fetched with a day of slack either side (a work day can
+    start the previous evening or end the next morning), then kept only if
+    their work_date is inside the range.
+    """
+    now = utcnow()
+    now_local = to_org_tz(now)
     events = (
-        filtered_events_query(caller)
-        .filter(AttendanceEvent.timestamp >= org_day_bounds_utc(start_day)[0],
-                AttendanceEvent.timestamp < org_day_bounds_utc(end_day)[1])
+        filtered_events_query(caller, apply_dates=False)
+        .filter(AttendanceEvent.timestamp >= org_day_bounds_utc(start_day - timedelta(days=1))[0],
+                AttendanceEvent.timestamp < org_day_bounds_utc(end_day + timedelta(days=1))[1])
         .order_by(AttendanceEvent.timestamp.asc())
         .all()
     )
+    depts = departments_by_name()
     grouped = defaultdict(list)
     for e in events:
-        grouped[(e.user_id, to_org_tz(e.timestamp).date())].append(e)
+        if e.user is None:
+            continue
+        day = event_work_date(e, user_department(e.user, depts))
+        if start_day <= day <= end_day:
+            grouped[(e.user_id, day)].append(e)
 
-    now = utcnow()
     rows = []
-    for (user_id, day), evs in sorted(grouped.items(), key=lambda kv: (kv[0][1], kv[1][0].user.full_name)):
-        ins = [e for e in evs if e.event_type == "CLOCK_IN"]
-        outs = [e for e in evs if e.event_type == "CLOCK_OUT"]
+    for (user_id, day), evs in sorted(grouped.items(), key=lambda kv: (kv[0][1], kv[1][0].user.full_name.lower())):
         user = evs[0].user
-        dept_break = department_break_times(user)
-        reg_events = [e for e in evs if e.session != "OT"]
-        ot_events = [e for e in evs if e.session == "OT"]
-        open_until = now if day == today_local else None
-        hours = round(_worked_seconds(reg_events, dept_break, open_until) / 3600, 2)
-        ot_hours = round(_worked_seconds(ot_events, dept_break, open_until) / 3600, 2)
+        dept = user_department(user, depts)
+        # The schedule the day was worked under: stamped on its events
+        # (legacy rows: derived from the current schedule).
+        arrival = _first_arrival(evs)
+        work_day = event_work_day(arrival or evs[0], dept)
+        break_window = work_day.break_window
+        reg_events = [e for e in evs if e.session in REGULAR_SESSIONS]
+        ot_events = [e for e in evs if e.session not in REGULAR_SESSIONS]
+        open_until = now if work_day.contains(now_local) else None
+        hours = round(_worked_seconds(reg_events, break_window, open_until) / 3600, 2)
+        ot_hours = round(_worked_seconds(ot_events, break_window, open_until) / 3600, 2)
+        outs = [e for e in evs if e.event_type == "CLOCK_OUT"]
+        regular_outs = [e for e in reg_events if e.event_type == "CLOCK_OUT"]
+        late_by = _day_late(evs)
+        early_by = early_minutes(regular_outs[-1]) if regular_outs else None
         rows.append({
             "date": day.isoformat(),
+            "work_date": day.isoformat(),
             "user_id": user_id,
             "user_name": user.full_name,
             "employee_code": user.employee_code,
             "department": user.department,
-            "first_in": ins[0].to_dict()["timestamp"] if ins else None,
+            "scheduled_start": work_day.scheduled_start,
+            "scheduled_end": work_day.scheduled_end,
+            "first_in": arrival.to_dict()["timestamp"] if arrival else None,
             "last_out": outs[-1].to_dict()["timestamp"] if outs else None,
             "hours": hours,
             "ot_hours": ot_hours,
             "total_hours": round(hours + ot_hours, 2),
-            "late": bool(ins and is_late(ins[0])),
-            "open": evs[-1].event_type == "CLOCK_IN",
+            "late": late_by is not None,
+            "late_minutes": late_by,
+            "early_leave": early_by is not None,
+            "early_minutes": early_by,
+            "open": _chain_open(evs),
             "events": len(evs),
         })
     return rows
@@ -317,15 +404,23 @@ def export_csv():
     events = filtered_events_query(caller).order_by(AttendanceEvent.timestamp.asc()).limit(50000).all()
     buf = io.StringIO()
     writer = csv.writer(buf)
+    # "Work date" is the shift's day: a night shift's 06:00 time out
+    # carries the previous date. Late/early come from the values stamped
+    # when the punch was recorded.
     writer.writerow(["Date", "Time", "Employee ID", "Name", "Department", "Event", "Session", "Late",
+                     "Work date", "Late (min)", "Early leave (min)",
                      "Confidence", "Method", "Device", "Notes"])
+    depts = departments_by_name()
     for e in events:
         local = to_org_tz(e.timestamp)
         u = e.user
+        lm, em = late_minutes(e), early_minutes(e)
         writer.writerow([
             local.date().isoformat(), local.strftime("%H:%M:%S"), _spreadsheet_safe(u.employee_code), _spreadsheet_safe(u.full_name),
             _spreadsheet_safe(u.department), "Clock in" if e.event_type == "CLOCK_IN" else "Clock out", e.session,
-            "Yes" if is_late(e) else "", f"{e.match_score * 100:.1f}%" if e.match_status == "MATCHED" else "",
+            "Yes" if lm is not None else "", event_work_date(e, user_department(u, depts)).isoformat(),
+            lm if lm is not None else "", em if em is not None else "",
+            f"{e.match_score * 100:.1f}%" if e.match_status == "MATCHED" else "",
             e.match_status, _spreadsheet_safe(e.device_id), _spreadsheet_safe(e.notes),
         ])
     # Query parameters are user-controlled and must not be copied verbatim
@@ -355,6 +450,28 @@ def summary():
 @report_bp.get("/audit")
 @require_roles("ADMIN")
 def audit():
-    logs = AuditLog.query.order_by(AuditLog.created_at.desc()).limit(200).all()
-    names = dict(db.session.query(User.id, User.full_name).all())
-    return jsonify([{**log.to_dict(), "actor_name": names.get(log.actor_user_id)} for log in logs])
+    """
+    Audit trail, newest first. ?limit (default 200, max 1000) / ?offset
+    page through it; ?from / ?to (org-local YYYY-MM-DD, inclusive) and
+    ?action (exact, case-insensitive) filter it. The body stays a plain
+    array; X-Total-Count carries the filtered total for paging.
+    """
+    limit, offset = parse_page_args(default_limit=200, max_limit=1000)
+    start_day, end_day = parse_day(request.args.get("from")), parse_day(request.args.get("to"))
+    if start_day and end_day and end_day < start_day:
+        raise AppError("'to' must be on or after 'from'.", 400)
+    query = AuditLog.query
+    if start_day:
+        query = query.filter(AuditLog.created_at >= org_day_bounds_utc(start_day)[0])
+    if end_day:
+        query = query.filter(AuditLog.created_at < org_day_bounds_utc(end_day)[1])
+    action = (request.args.get("action") or "").strip()
+    if action:
+        query = query.filter(func.upper(AuditLog.action) == action.upper()[:80])
+    total = query.order_by(None).count()
+    logs = query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).offset(offset).limit(limit).all()
+    actor_ids = {log.actor_user_id for log in logs if log.actor_user_id}
+    names = dict(db.session.query(User.id, User.full_name).filter(User.id.in_(actor_ids)).all()) if actor_ids else {}
+    response = jsonify([{**log.to_dict(), "actor_name": names.get(log.actor_user_id)} for log in logs])
+    response.headers["X-Total-Count"] = str(total)
+    return response

@@ -1,0 +1,96 @@
+# Local development stack (NOT for production - no TLS, debug-friendly).
+#
+#   docker compose -f docker-compose.dev.yml up --build
+#
+#   http://localhost:5173  Vite dev server with hot reload; it proxies /api
+#                          and /socket.io to the backend, so the app, the API
+#                          and the refresh cookie share one origin (as in prod)
+#   http://localhost:5000  backend directly (API tools, curl)
+#   localhost:5432         PostgreSQL (user/db "attendance", password "attendance-dev")
+#
+# Frontend source is bind-mounted: edits under frontend/ show up instantly.
+# Backend code is baked into the image: after changing Python code run
+#   docker compose -f docker-compose.dev.yml up -d --build backend
+# (or run the backend natively: cd backend && python run.py, and the
+#  frontend natively: cd frontend && npm run dev).
+#
+# Uses its own project name and volumes, so it never touches production data.
+name: attendance-dev
+
+services:
+  db:
+    image: postgres:16.10-alpine
+    environment:
+      POSTGRES_USER: attendance
+      POSTGRES_DB: attendance
+      POSTGRES_PASSWORD: attendance-dev
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U attendance -d attendance"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    image: attendance-backend:dev
+    # Optional: your own backend/.env (e.g. a FACE_DATA_KEY to test
+    # encryption). The values under `environment` below always win.
+    env_file:
+      - path: backend/.env
+        required: false
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+psycopg2://attendance:attendance-dev@db:5432/attendance
+      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      # Plain HTTP in dev: the refresh cookie must not be Secure-only.
+      JWT_COOKIE_SECURE: "false"
+      # Requests arrive through the Vite proxy (which adds X-Forwarded-For).
+      TRUST_PROXY_HOPS: "1"
+      LOG_LEVEL: DEBUG
+      LOG_DIR: /app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:5000:5000"
+    volumes:
+      - ./backend/models:/app/models:ro
+      - backend-logs-dev:/app/logs
+
+  frontend:
+    image: node:22.18.0-alpine
+    working_dir: /app
+    # Install dependencies only when package-lock.json changed, then serve.
+    command:
+      - sh
+      - -c
+      - |
+        if [ ! -f node_modules/.package-lock.json ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+          npm ci --no-audit --no-fund
+        fi
+        exec npm run dev -- --host 0.0.0.0
+    environment:
+      VITE_DEV_PROXY_TARGET: http://backend:5000
+      # Bind mounts from Windows/macOS don't deliver file-change events.
+      VITE_USE_POLLING: "true"
+      # Empty = relative "/api" through the dev proxy (overrides any absolute
+      # URL left in frontend/.env).
+      VITE_API_URL: ""
+    ports:
+      - "127.0.0.1:5173:5173"
+    volumes:
+      - ./frontend:/app
+      # Linux node_modules live in a volume, so the host's (Windows) copy
+      # with its platform-specific binaries is never used inside the container.
+      - frontend-node-modules-dev:/app/node_modules
+    depends_on:
+      - backend
+
+volumes:
+  pgdata-dev:
+  backend-logs-dev:
+  frontend-node-modules-dev:

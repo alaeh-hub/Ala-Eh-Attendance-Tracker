@@ -17,7 +17,8 @@ from app.services.face_service import face_present, recognize_burst
 from app.vision.zone import parse_zone
 from app.services.snapshot_service import save_snapshot
 from app.utils.blocking import run_blocking
-from app.utils.auth import require_roles
+from app.utils.auth import KIOSK_ROLE, is_kiosk_locked, load_current_user, require_roles
+from app.utils.ratelimit import rate_limit, user_ip_key
 from app.utils.timezone import now_in_org_tz
 from app.vision.liveness import liveness_tracker
 
@@ -25,6 +26,20 @@ recognition_bp = Blueprint("recognition", __name__)
 logger = logging.getLogger("app.recognition")
 
 MAX_FRAMES = 16
+KIOSK_ROLES = ("ADMIN", "OPERATOR", KIOSK_ROLE)
+
+
+def _device_id(user) -> str:
+    """
+    The device recorded on attendance and snapshots. A KIOSK account IS the
+    device, so its own identity is used and the client's value ignored. For
+    an admin/operator kiosk the client's label is kept but prefixed with the
+    signed-in account, so a punch can't be attributed to someone else's kiosk.
+    """
+    if user.role == KIOSK_ROLE:
+        return f"kiosk:{user.employee_code or user.email}"[:80]
+    client = (request.form.get("device_id") or "kiosk").strip() or "kiosk"
+    return f"{user.email}/{client}"[:80]
 
 
 def _log_outcome(status: str, device_id: str, result: dict, user=None, extra: str = ""):
@@ -50,7 +65,7 @@ def _log_outcome(status: str, device_id: str, result: dict, user=None, extra: st
 
 
 @recognition_bp.get("/kiosk-config")
-@require_roles()
+@require_roles(*KIOSK_ROLES, allow_kiosk=True)
 def kiosk_config():
     """What the kiosk needs to decide which punches it should offer right now:
     the organisation's current time (the tablet's own clock and timezone may differ)
@@ -65,7 +80,8 @@ def kiosk_config():
 
 
 @recognition_bp.post("/presence")
-@require_roles()
+@require_roles(*KIOSK_ROLES, allow_kiosk=True)
+@rate_limit("presence", limit=240, per=60, key=user_ip_key)
 def presence():
     """The idle kiosk polls this with a small frame to find out whether someone has walked
     up to it. Detection only: the frame is not stored, and nobody is identified."""
@@ -77,7 +93,8 @@ def presence():
 
 
 @recognition_bp.post("/check-in")
-@require_roles("ADMIN", "OPERATOR")
+@require_roles(*KIOSK_ROLES, allow_kiosk=True)
+@rate_limit("check-in", limit=60, per=60, key=user_ip_key)
 def check_in():
     """
     Kiosk endpoint. Expects a burst of frames (multipart field "frames",
@@ -85,13 +102,19 @@ def check_in():
     assessed together. Always returns a structured status the frontend
     must handle: NO_FACE, NO_MATCH, LOW_CONFIDENCE, AMBIGUOUS_MATCH,
     LIVENESS_FAILED, COOLDOWN, VERIFIED, MATCHED.
+
+    Only a kiosk-locked session may punch: an admin's ordinary portal
+    session (e.g. a token copied from a laptop) can't record attendance.
     """
+    if not is_kiosk_locked():
+        raise AppError("Check-in is only available on a locked kiosk. Open the kiosk screen first.", 403,
+                       {"code": "KIOSK_REQUIRED"})
     files = request.files.getlist("frames")
     if not files:
         raise AppError("At least one frame is required (field 'frames').", 400)
     if len(files) > MAX_FRAMES:
         raise AppError(f"No more than {MAX_FRAMES} frames may be sent per check-in.", 413)
-    device_id = (request.form.get("device_id") or "kiosk")[:80]
+    device_id = _device_id(load_current_user())
     # The kiosk's six buttons (AM/PM/OT x In/Out) arrive as a
     # (session, event_type) pair, or neither for "Auto". Both are only
     # hints: attendance_service.resolve_punch decides the punch that is
@@ -151,6 +174,10 @@ def check_in():
         }), 200
 
     if cfg["LIVENESS_REQUIRED"]:
+        if result.get("liveness_identity_mismatch"):
+            # A borrowed blink taints the whole attempt: blinks pooled from
+            # the previous few seconds may have come from the same trick.
+            liveness_tracker.discard((device_id, user.id))
         liveness = liveness_tracker.add_and_evaluate(
             (device_id, user.id), result["ears"], cfg["LIVENESS_WINDOW_SECONDS"], cfg["LIVENESS_EAR_BLINK_DELTA"]
         )
@@ -158,7 +185,14 @@ def check_in():
             # Recognised but not yet proven live: tell the kiosk who we think
             # it is (first name only) so the prompt feels personal, but record
             # nothing. The EAR samples are pooled for the next scan.
-            _log_outcome("LIVENESS_FAILED", device_id, result, user=user, extra=f" reason={liveness['reason']!r}")
+            # liveness_identity_mismatch: the blink came from frames of a
+            # different face than the one matched (a "borrowed blink", e.g.
+            # someone blinking next to a held-up photo). Logged so reviewers
+            # can search for it.
+            extra = f" reason={liveness['reason']!r}"
+            if result.get("liveness_identity_mismatch"):
+                extra += " liveness_identity_mismatch=true"
+            _log_outcome("LIVENESS_FAILED", device_id, result, user=user, extra=extra)
             save_snapshot(snapshot, "LIVENESS_FAILED", user_id=user.id, **snap_args)
             return jsonify({
                 "status": "LIVENESS_FAILED",

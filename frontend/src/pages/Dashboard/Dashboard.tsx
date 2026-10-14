@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Mascot } from "page-mascot";
-import { io } from "socket.io-client";
+import { Socket, io } from "socket.io-client";
 import Icon from "../../components/Icon";
-import { Avatar, EmptyState, EventBadge, PageHeader, StatCard, formatTime, timeAgo } from "../../components/ui";
-import api, { SOCKET_URL } from "../../services/api";
+import { Avatar, EmptyState, EventBadge, PageHeader, StatCard, formatDateTime, formatTime, timeAgo } from "../../components/ui";
+import api, { SOCKET_URL, getAccessToken, isAuthFailure, refreshOrExpire } from "../../services/api";
+import { formatDate, orgNow, useOrgStore } from "../../utils/orgTime";
 import type { AttendanceEvent, TodayReport } from "../../types";
 
 // Validated (dataviz validate_palette.js, dark mode on #141414): in-band
@@ -42,7 +43,8 @@ export default function Dashboard() {
   const [events, setEvents] = useState<AttendanceEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [connected, setConnected] = useState(false);
+  const [conn, setConn] = useState<"connecting" | "live" | "reconnecting">("connecting");
+  useOrgStore((s) => s.timeZone); // re-render dates when the org timezone arrives
   const [flashId, setFlashId] = useState<string | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout>>();
 
@@ -62,14 +64,43 @@ export default function Dashboard() {
   useEffect(() => {
     load();
     const poll = setInterval(load, 60_000);
-    let socket: ReturnType<typeof io> | undefined;
+    let socket: Socket | undefined;
+    let closed = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let failures = 0;
     // React Strict Mode runs an extra setup/cleanup cycle in development.
     // Defer connecting so that cycle can cancel before opening a WebSocket.
     const connectTimer = setTimeout(() => {
-      socket = io(SOCKET_URL, { auth: { token: localStorage.getItem("access_token") }, transports: ["websocket", "polling"] });
-      socket.on("connect", () => setConnected(true));
-      socket.on("disconnect", () => setConnected(false));
-      socket.on("attendance_event", (event: AttendanceEvent) => {
+      const options = {
+        // A callback, so every (re)connect sends the current in-memory access token.
+        auth: (cb: (data: object) => void) => cb({ token: getAccessToken() }),
+        transports: ["websocket", "polling"],
+      };
+      // Same origin as the page unless the API lives on another origin.
+      socket = SOCKET_URL ? io(SOCKET_URL, options) : io(options);
+      const s = socket;
+      s.on("connect", () => {
+        failures = 0;
+        setConn("live");
+      });
+      s.on("disconnect", () => setConn("reconnecting"));
+      s.on("connect_error", async () => {
+        setConn("reconnecting");
+        // socket.io retries transport errors on its own; a rejected handshake
+        // (usually an expired access token) leaves it inactive. Refresh the
+        // token, then reconnect with backoff.
+        if (s.active || closed) return;
+        failures += 1;
+        try {
+          await refreshOrExpire();
+        } catch (err) {
+          if (isAuthFailure(err)) return; // signed out: the app returns to the sign-in page
+        }
+        if (closed) return;
+        clearTimeout(retryTimer);
+        retryTimer = setTimeout(() => !closed && s.connect(), Math.min(30_000, 1000 * 2 ** Math.min(failures - 1, 5)));
+      });
+      s.on("attendance_event", (event: AttendanceEvent) => {
         setEvents((prev) => [event, ...prev.filter((p) => p.id !== event.id)].slice(0, 30));
         setFlashId(event.id);
         clearTimeout(refreshTimer.current);
@@ -77,8 +108,10 @@ export default function Dashboard() {
       });
     }, 0);
     return () => {
+      closed = true;
       clearInterval(poll);
       clearTimeout(connectTimer);
+      clearTimeout(retryTimer);
       clearTimeout(refreshTimer.current);
       socket?.disconnect();
     };
@@ -93,7 +126,7 @@ export default function Dashboard() {
   }, [report]);
 
   const attendanceRate = report && report.total_employees ? Math.round((report.present / report.total_employees) * 100) : 0;
-  const today = new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+  const today = formatDate(report?.date ?? orgNow(), { weekday: "long", month: "long", day: "numeric", year: "numeric" });
 
   return (
     <>
@@ -111,9 +144,13 @@ export default function Dashboard() {
         }
         actions={
           <>
-            <span className={`chip py-1.5 ${connected ? "bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/25" : "bg-orange-500/10 text-orange-300 ring-1 ring-orange-500/25"}`}>
-              <span className={`h-2 w-2 rounded-full ${connected ? "bg-emerald-400 animate-pulse" : "bg-orange-400"}`} />
-              {connected ? "Live" : "Reconnecting"}
+            <span
+              role="status"
+              title={conn === "live" ? "Receiving scans in real time" : "Live updates paused; the page still refreshes every minute"}
+              className={`chip py-1.5 ${conn === "live" ? "bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/25" : "bg-orange-500/10 text-orange-300 ring-1 ring-orange-500/25"}`}
+            >
+              <span className={`h-2 w-2 rounded-full ${conn === "live" ? "bg-emerald-400 animate-pulse" : "bg-orange-400"}`} />
+              {conn === "live" ? "Live" : conn === "connecting" ? "Connecting…" : "Reconnecting…"}
             </span>
             <Link to="/kiosk" className="btn-primary">
               <Icon name="scan" className="h-4 w-4" /> Open kiosk
@@ -239,7 +276,7 @@ export default function Dashboard() {
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <EventBadge type={e.event_type} session={e.session} late={e.is_late} lateMinutes={e.late_minutes} earlyMinutes={e.early_minutes} />
-                  <span className="text-[11px] tabular-nums text-neutral-500" title={new Date(e.timestamp).toLocaleString()}>
+                  <span className="text-[11px] tabular-nums text-neutral-500" title={formatDateTime(e.timestamp)}>
                     {formatTime(e.timestamp)} · {timeAgo(e.timestamp)}
                   </span>
                 </div>

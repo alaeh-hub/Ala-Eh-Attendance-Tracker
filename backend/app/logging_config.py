@@ -46,7 +46,6 @@ class _RequestIdFilter(logging.Filter):
 
 def configure_logging(app) -> None:
     log_dir = app.config.get("LOG_DIR", DEFAULT_LOG_DIR)
-    os.makedirs(log_dir, exist_ok=True)
     level_name = app.config.get("LOG_LEVEL", "INFO")
     level = getattr(logging, str(level_name).upper(), logging.INFO)
 
@@ -57,11 +56,18 @@ def configure_logging(app) -> None:
     console_handler.setFormatter(formatter)
     console_handler.addFilter(request_id_filter)
 
-    file_handler = RotatingFileHandler(
-        os.path.join(log_dir, "app.log"), maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8"
-    )
-    file_handler.setFormatter(formatter)
-    file_handler.addFilter(request_id_filter)
+    # A log folder the app can't write to (e.g. a root-owned volume left by an
+    # older container) must not stop the server: log to the console only.
+    file_handler = None
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            os.path.join(log_dir, "app.log"), maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8"
+        )
+        file_handler.setFormatter(formatter)
+        file_handler.addFilter(request_id_filter)
+    except OSError as exc:
+        print(f"WARNING: cannot write log files to {log_dir} ({exc}); logging to the console only.", flush=True)
 
     root = logging.getLogger()
     root.setLevel(level)
@@ -73,7 +79,8 @@ def configure_logging(app) -> None:
         root.removeHandler(handler)
         handler.close()
     root.addHandler(console_handler)
-    root.addHandler(file_handler)
+    if file_handler is not None:
+        root.addHandler(file_handler)
 
     # werkzeug's own access log (GET /api/... 200 -) goes through the same
     # handlers instead of printing unformatted lines straight to stderr.

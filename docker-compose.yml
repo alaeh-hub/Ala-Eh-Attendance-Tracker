@@ -1,6 +1,109 @@
+# Production stack for the face-recognition attendance system.
+#
+#   browser/kiosk --HTTPS--> caddy :443 --+--> /api, /socket.io --> backend:5000 --> db:5432
+#                                          +--> everything else  --> frontend:8080 (static SPA)
+#   backup: pg_dump of db every BACKUP_INTERVAL_SECONDS into BACKUP_DIR
+#
+# Only caddy publishes ports. The database sits on an internal network with
+# no route to the outside world.
+#
+# Setup (full guide: docs/DEPLOYMENT.md):
+#   cp deploy/env.example .env                       # SITE_ADDRESS, TLS_MODE, backups
+#   python backend/tools/generate_secrets.py --write backend/.env   # then edit CORS_ORIGINS etc.
+#   docker compose up -d --build
+#
+# For live-edit development use docker-compose.dev.yml instead.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  logging: *default-logging
+
 services:
+  caddy:
+    image: caddy:2.10.2-alpine
+    <<: *hardening
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_started
+      backend:
+        condition: service_started
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-localhost}
+      TLS_MODE: ${TLS_MODE:-internal}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"     # HTTP/3
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/certs:/etc/caddy/certs:ro      # only used with TLS_MODE=files
+      - caddy-data:/data                       # certificates, internal CA root - keep it
+      - caddy-config:/config
+    networks:
+      - edge
+    healthcheck:
+      # Caddy's admin API answers only inside the container.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: /api
+    image: attendance-frontend:latest
+    <<: *hardening
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp                 # nginx pid + temp files
+    cap_drop: [ALL]
+    expose:
+      - "8080"
+    networks:
+      - edge
+
+  backend:
+    build: ./backend
+    image: attendance-backend:latest
+    <<: *hardening
+    restart: unless-stopped
+    env_file: backend/.env
+    environment:
+      APP_ENV: production
+      TRUST_PROXY_HOPS: "1"          # exactly one proxy (caddy) in front
+      LOG_DIR: /app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "5000"
+    read_only: true
+    tmpfs:
+      - /tmp                 # gunicorn worker heartbeat, temp files
+    cap_drop: [ALL]
+    stop_grace_period: 40s   # gunicorn --graceful-timeout is 30s
+    volumes:
+      - ./backend/models:/app/models:ro   # YuNet/SFace/MiniFASNet ONNX files
+      - backend-logs:/app/logs            # rotating app.log (writable by the app user)
+    networks:
+      - edge
+      - data
+
   db:
-    image: postgres:16-alpine
+    image: postgres:16.10-alpine
+    <<: *hardening
     restart: unless-stopped
     environment:
       POSTGRES_USER: attendance
@@ -8,39 +111,47 @@ services:
     env_file: backend/.env          # supplies POSTGRES_PASSWORD
     volumes:
       - pgdata:/var/lib/postgresql/data
+    shm_size: 128mb
+    networks:
+      - data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U attendance -d attendance"]
       interval: 5s
       timeout: 3s
       retries: 10
+      start_period: 20s
 
-  backend:
-    build: ./backend
+  backup:
+    # Same image as db, so pg_dump always matches the server version.
+    image: postgres:16.10-alpine
+    <<: *hardening
     restart: unless-stopped
-    env_file: backend/.env
+    init: true                      # clean, immediate stop on `docker compose stop`
+    entrypoint: ["sh", "/usr/local/bin/backup.sh"]
+    env_file: backend/.env          # supplies POSTGRES_PASSWORD
+    environment:
+      PGHOST: db
+      PGUSER: attendance
+      PGDATABASE: attendance
+      BACKUP_DIR: /backups
+      BACKUP_KEEP: ${BACKUP_KEEP:-14}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
     depends_on:
       db:
         condition: service_healthy
-    ports:
-      - "5000:5000"
     volumes:
-      - ./backend/models:/app/models:ro   # YuNet/SFace/MiniFASNet ONNX files
-      - backend-logs:/app/logs
+      - ./deploy/backup.sh:/usr/local/bin/backup.sh:ro
+      - ${BACKUP_DIR:-./backups}:/backups
+    networks:
+      - data
 
-  frontend:
-    build: ./frontend
-    restart: unless-stopped
-    env_file: frontend/.env
-    volumes:                        # live-edit: changes under src/ show up without a rebuild
-      - ./frontend/src:/app/src
-      - ./frontend/public:/app/public
-      - ./frontend/index.html:/app/index.html
-      - ./frontend/vite.config.ts:/app/vite.config.ts
-    depends_on:
-      - backend
-    ports:
-      - "5173:5173"
+networks:
+  edge: {}
+  data:
+    internal: true    # db and backup: no published ports, no internet access
 
 volumes:
   pgdata:
   backend-logs:
+  caddy-data:
+  caddy-config:

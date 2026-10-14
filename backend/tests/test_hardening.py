@@ -184,7 +184,7 @@ class SnapshotReviewTests(BaseAppTest):
 
     def _checkin(self, burst):
         with mock.patch("app.api.recognition_routes.recognize_burst", return_value=burst):
-            return self.client.post("/api/recognition/check-in", headers=self.auth(), content_type="multipart/form-data",
+            return self.client.post("/api/recognition/check-in", headers=self.kiosk_auth(), content_type="multipart/form-data",
                                     data={"frames": [(jpeg(), "f.jpg")], "device_id": "kiosk-1"})
 
     def test_matched_checkin_keeps_audit_snapshot_linked_to_event(self):
@@ -248,3 +248,42 @@ class SnapshotReviewTests(BaseAppTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SocketOriginTests(unittest.TestCase):
+    """The live feed must accept the site's own origin behind the proxy even
+    when CORS_ORIGINS doesn't list it, and still refuse foreign origins."""
+
+    ENV = {"HTTP_HOST": "backend:5000", "wsgi.url_scheme": "http",
+           "HTTP_X_FORWARDED_PROTO": "https", "HTTP_X_FORWARDED_HOST": "attendance.example.com"}
+
+    def _check(self, hops):
+        from types import SimpleNamespace
+
+        from app import _socket_origin_check
+        return _socket_origin_check(SimpleNamespace(config={"CORS_ORIGINS": ["http://localhost:5173"],
+                                                             "TRUST_PROXY_HOPS": hops}))
+
+    def test_same_origin_behind_trusted_proxy(self):
+        check = self._check(1)
+        self.assertTrue(check("https://attendance.example.com", self.ENV))
+        self.assertTrue(check("http://localhost:5173", self.ENV))
+        self.assertFalse(check("https://evil.example", self.ENV))
+
+    def test_forwarded_host_ignored_without_trusted_proxy(self):
+        check = self._check(0)
+        self.assertFalse(check("https://attendance.example.com", self.ENV))
+        self.assertTrue(check("http://backend:5000", self.ENV))
+
+
+class LoggingResilienceTests(unittest.TestCase):
+    def test_unwritable_log_dir_does_not_crash_startup(self):
+        import logging
+        from types import SimpleNamespace
+
+        from app.logging_config import configure_logging
+
+        with mock.patch("app.logging_config.RotatingFileHandler", side_effect=PermissionError(13, "denied")):
+            configure_logging(SimpleNamespace(config={"LOG_DIR": "/nonexistent-readonly", "LOG_LEVEL": "INFO"},
+                                              logger=logging.getLogger("t")))
+        self.assertTrue(logging.getLogger().handlers)

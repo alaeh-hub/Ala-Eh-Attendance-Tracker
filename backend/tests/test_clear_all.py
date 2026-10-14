@@ -66,13 +66,15 @@ class ClearAllDataTests(BaseAppTest):
         self.assertIsNone(admin.biometric_consent_at)
         self.assertIsNotNone(db.session.get(User, self.operator_id))
         self.assertEqual(Department.query.count(), 1)
-        self.assertEqual(res.json["kept"], {"admins": 1, "operators": 1, "departments": 1})
+        self.assertEqual(res.json["kept"], {"admins": 1, "operators": 1, "kiosks": 0, "departments": 1})
 
-    def test_audit_history_is_cleared_but_the_reset_itself_is_recorded(self):
-        self._clear()
-        entries = AuditLog.query.all()
-        self.assertEqual([e.action for e in entries], ["ALL_DATA_CLEARED"])
-        self.assertEqual(entries[0].actor_user_id, self.admin_id)
+    def test_audit_history_is_kept_and_the_reset_itself_is_recorded(self):
+        res = self._clear()
+        self.assertNotIn("audit_entries", res.json)
+        actions = [e.action for e in AuditLog.query.order_by(AuditLog.created_at).all()]
+        self.assertIn("USER_CREATED", actions)   # history from before the reset survives
+        reset = AuditLog.query.filter_by(action="ALL_DATA_CLEARED").one()
+        self.assertEqual(reset.actor_user_id, self.admin_id)
 
     def test_operators_can_be_removed_too_on_request(self):
         res = self._clear(keep_operators=False)

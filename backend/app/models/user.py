@@ -21,7 +21,9 @@ class User(db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
 
-    # ADMIN | STAFF | OPERATOR
+    # ADMIN | STAFF | OPERATOR | KIOSK. KIOSK is a device account for a
+    # check-in tablet: it signs in with a password but its sessions are
+    # always kiosk-locked (see app/utils/auth.py).
     role = db.Column(db.String(20), nullable=False, default="STAFF")
 
     # --- Employee profile ---
@@ -38,12 +40,25 @@ class User(db.Model):
     biometric_consent_by = db.Column(db.String(36), nullable=True)
 
     is_active = db.Column(db.Boolean, default=True, nullable=False)
+    # Embedded in every JWT as the "tv" claim. Bumping it (password change,
+    # sign-in revoked, deactivation, role change, archive) invalidates every
+    # token issued before, without tracking them individually.
+    token_version = db.Column(db.Integer, nullable=False, default=0, server_default="0")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     embeddings = db.relationship("FaceEmbedding", backref="user", cascade="all, delete-orphan")
-    attendance_events = db.relationship("AttendanceEvent", backref="user", cascade="all, delete-orphan")
+    # Attendance is a payroll record and must outlive the account: deleting a
+    # User never touches its events (passive_deletes="all" stops SQLAlchemy
+    # from deleting or nulling them). The users API archives an employee who
+    # has attendance instead of deleting them; see user_routes.delete_user.
+    attendance_events = db.relationship("AttendanceEvent", backref="user", cascade="save-update, merge",
+                                        passive_deletes="all")
     snapshots = db.relationship("ScanSnapshot", foreign_keys="ScanSnapshot.user_id", cascade="all, delete-orphan")
+
+    def revoke_tokens(self):
+        """Invalidate every access/refresh token issued to this user so far."""
+        self.token_version = (self.token_version or 0) + 1
 
     @property
     def can_login(self) -> bool:

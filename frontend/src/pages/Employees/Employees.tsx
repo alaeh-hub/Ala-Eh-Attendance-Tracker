@@ -1,15 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import Pager from "../../components/admin/Pager";
+import { AnyRole, ROLE_HELP } from "../../components/admin/roles";
 import ClearAllDataDialog, { ClearAllResult } from "../../components/ClearAllDataDialog";
 import Icon from "../../components/Icon";
 import { Avatar, ConfirmDialog, EmptyState, Field, Modal, PageHeader, RoleBadge, Spinner, forgetPhoto } from "../../components/ui";
 import api, { errorMessage } from "../../services/api";
 import { useAuthStore } from "../../stores/authStore";
 import { toast } from "../../stores/toastStore";
-import type { Department, Role, User } from "../../types";
+import type { Department, User } from "../../types";
 import { smartMatch } from "../../utils/search";
 
 type StatusFilter = "all" | "active" | "inactive" | "not_enrolled";
+type DeleteResult = { deleted?: boolean; archived?: boolean; id?: string };
+
+const PAGE_SIZE = 50;
 
 export default function Employees() {
   const me = useAuthStore((s) => s.user);
@@ -23,6 +28,7 @@ export default function Employees() {
   const [confirm, setConfirm] = useState<{ user: User; action: "deactivate" | "delete" } | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmClearAll, setConfirmClearAll] = useState(false);
+  const [page, setPage] = useState({ key: "", offset: 0 });
 
   useEffect(() => {
     api
@@ -40,10 +46,15 @@ export default function Employees() {
       if (department && u.department !== department) return false;
       if (status === "active" && !u.is_active) return false;
       if (status === "inactive" && u.is_active) return false;
-      if (status === "not_enrolled" && u.enrolled) return false;
+      if (status === "not_enrolled" && (u.enrolled || u.role === "KIOSK")) return false;
       return smartMatch(search, [u.full_name, u.email, u.employee_code, u.department, u.position]);
     });
   }, [users, search, department, status]);
+
+  // Paging restarts at the first page whenever the filters change.
+  const filterKey = JSON.stringify([search, department, status]);
+  const offset = page.key === filterKey ? Math.min(page.offset, Math.max(0, Math.floor((filtered.length - 1) / PAGE_SIZE) * PAGE_SIZE)) : 0;
+  const visible = filtered.slice(offset, offset + PAGE_SIZE);
 
   const counts = useMemo(
     () => ({
@@ -57,6 +68,7 @@ export default function Employees() {
   const replace = (u: User) => setUsers((prev) => prev.map((p) => (p.id === u.id ? u : p)));
 
   async function setActive(user: User, active: boolean) {
+    if (busy) return;
     setBusy(true);
     try {
       const res = await api.patch<User>(`/users/${user.id}`, { is_active: active });
@@ -80,16 +92,26 @@ export default function Employees() {
     try {
       setUsers((await api.get<User[]>("/users")).data);
     } catch {
-      setUsers((prev) => prev.filter((u) => u.role === "ADMIN" || (u.role === "OPERATOR" && result.kept.operators > 0)));
+      setUsers((prev) =>
+        prev.filter((u) => u.role === "ADMIN" || (u.role === "OPERATOR" && result.kept.operators > 0) || (u.role === "KIOSK" && (result.kept.kiosks ?? 0) > 0))
+      );
     }
   }
 
   async function remove(user: User) {
+    if (busy) return;
     setBusy(true);
     try {
-      await api.delete(`/users/${user.id}`);
-      setUsers((prev) => prev.filter((p) => p.id !== user.id));
-      toast.success("Employee deleted", user.full_name);
+      const res = await api.delete<DeleteResult>(`/users/${user.id}`);
+      forgetPhoto(user.id);
+      if (res?.data?.archived) {
+        // Kept for payroll: deactivated, sign-in revoked, face data erased.
+        replace({ ...user, is_active: false, can_login: false, enrolled: false, sample_count: 0, has_photo: false });
+        toast.success("Employee archived", `${user.full_name} has attendance history, so they were deactivated and their face data erased. Attendance records are kept.`);
+      } else {
+        setUsers((prev) => prev.filter((p) => p.id !== user.id));
+        toast.success("Employee deleted", user.full_name);
+      }
       setConfirm(null);
     } catch (err) {
       toast.error("Couldn't delete employee", errorMessage(err));
@@ -120,7 +142,7 @@ export default function Employees() {
       <div className="card mb-4 flex flex-col gap-3 p-3 sm:flex-row sm:items-center animate-fade-up">
         <div className="relative flex-1">
           <Icon name="search" className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
-          <input className="input pl-10" placeholder="Search name, ID, email, position…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input className="input pl-10" placeholder="Search name, ID, email, position…" aria-label="Search employees" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
         <select className="input sm:w-48" value={department} onChange={(e) => setDepartment(e.target.value)} aria-label="Department">
           <option value="">All departments</option>
@@ -167,7 +189,7 @@ export default function Employees() {
                   </tr>
                 ))}
               {!loading &&
-                filtered.map((u) => (
+                visible.map((u) => (
                   <tr key={u.id} className={`transition-colors hover:bg-white/[0.02] ${u.is_active ? "" : "opacity-60"}`}>
                     <td className="table-cell">
                       <div className="flex items-center gap-3">
@@ -190,7 +212,11 @@ export default function Employees() {
                       <RoleBadge role={u.role} />
                     </td>
                     <td className="table-cell">
-                      {u.enrolled ? (
+                      {u.role === "KIOSK" ? (
+                        <span className="chip bg-white/[0.06] text-neutral-400 ring-1 ring-white/10" title="Kiosk device accounts don't have a face.">
+                          Device account
+                        </span>
+                      ) : u.enrolled ? (
                         <span className="chip bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/25">
                           <Icon name="check" className="h-3 w-3" strokeWidth={3} /> {u.sample_count} samples
                         </span>
@@ -208,21 +234,35 @@ export default function Employees() {
                     </td>
                     <td className="table-cell">
                       <div className="flex justify-end gap-1">
-                        <Link to={`/enroll?user=${u.id}`} className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-brand-500/10 hover:text-brand-300" title="Face enrollment">
-                          <Icon name="scan" className="h-4 w-4" />
-                        </Link>
-                        <button onClick={() => setEditing(u)} className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-white/10 hover:text-white" title="Edit">
+                        {u.role !== "KIOSK" && (
+                          <Link
+                            to={`/enroll?user=${u.id}`}
+                            className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-brand-500/10 hover:text-brand-300"
+                            title="Face enrollment"
+                            aria-label={`Face enrollment for ${u.full_name}`}
+                          >
+                            <Icon name="scan" className="h-4 w-4" />
+                          </Link>
+                        )}
+                        <button onClick={() => setEditing(u)} className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-white/10 hover:text-white" title="Edit" aria-label={`Edit ${u.full_name}`}>
                           <Icon name="edit" className="h-4 w-4" />
                         </button>
                         {u.id !== me?.id && (
                           <>
                             <button
                               onClick={() => (u.is_active ? setConfirm({ user: u, action: "deactivate" }) : setActive(u, true))}
+                              disabled={busy}
                               className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-neutral-400 transition-colors hover:bg-white/10 hover:text-white"
+                              aria-label={`${u.is_active ? "Deactivate" : "Reactivate"} ${u.full_name}`}
                             >
                               {u.is_active ? "Deactivate" : "Reactivate"}
                             </button>
-                            <button onClick={() => setConfirm({ user: u, action: "delete" })} className="rounded-lg p-2 text-neutral-500 transition-colors hover:bg-red-500/10 hover:text-red-300" title="Delete">
+                            <button
+                              onClick={() => setConfirm({ user: u, action: "delete" })}
+                              className="rounded-lg p-2 text-neutral-500 transition-colors hover:bg-red-500/10 hover:text-red-300"
+                              title="Delete"
+                              aria-label={`Delete ${u.full_name}`}
+                            >
                               <Icon name="trash" className="h-4 w-4" />
                             </button>
                           </>
@@ -242,6 +282,7 @@ export default function Employees() {
             action={!users.length && <Link to="/admin/enroll" className="btn-primary">Add employee</Link>}
           />
         )}
+        {!loading && <Pager offset={offset} pageSize={PAGE_SIZE} shown={visible.length} total={filtered.length} noun="employees" onChange={(o) => setPage({ key: filterKey, offset: o })} />}
       </div>
 
       {editing && <EditEmployee user={editing} isSelf={editing.id === me?.id} departments={deptList} onClose={() => setEditing(null)} onSaved={(u) => { replace(u); setEditing(null); }} />}
@@ -253,12 +294,17 @@ export default function Employees() {
         title={confirm?.action === "delete" ? "Delete employee?" : "Deactivate employee?"}
         danger
         busy={busy}
-        confirmLabel={confirm?.action === "delete" ? "Delete permanently" : "Deactivate"}
+        confirmLabel={confirm?.action === "delete" ? "Delete employee" : "Deactivate"}
         message={
           confirm?.action === "delete" ? (
             <>
-              This permanently deletes <b className="text-white">{confirm.user.full_name}</b>, their face samples <b>and all attendance history</b>. For former employees,
-              deactivating is usually better — it keeps their records.
+              <p>
+                Delete <b className="text-white">{confirm.user.full_name}</b>?
+              </p>
+              <p className="mt-2">
+                Employees with attendance history are <b className="text-white">archived</b>: deactivated and their face data erased; attendance records are kept for payroll.
+                Employees with no attendance are deleted permanently.
+              </p>
             </>
           ) : (
             <>
@@ -267,7 +313,7 @@ export default function Employees() {
           )
         }
         onConfirm={() => confirm && (confirm.action === "delete" ? remove(confirm.user) : setActive(confirm.user, false))}
-        onClose={() => setConfirm(null)}
+        onClose={() => !busy && setConfirm(null)}
       />
     </>
   );
@@ -281,7 +327,7 @@ function EditEmployee({ user, isSelf, departments, onClose, onSaved }: { user: U
     phone: user.phone ?? "",
     department: user.department ?? "",
     position: user.position ?? "",
-    role: user.role as Role,
+    role: user.role as AnyRole,
     password: "",
   });
   const [saving, setSaving] = useState(false);
@@ -290,18 +336,43 @@ function EditEmployee({ user, isSelf, departments, onClose, onSaved }: { user: U
   const selectedDept = departments.find((d) => d.name === form.department);
 
   async function save(extra: Record<string, unknown> = {}) {
+    if (saving) return;
+    // Only changed fields, in ONE request: a password and a role change land together or not at all.
+    const original: Record<string, string> = {
+      full_name: user.full_name,
+      employee_code: user.employee_code ?? "",
+      email: user.email,
+      phone: user.phone ?? "",
+      department: user.department ?? "",
+      position: user.position ?? "",
+      role: user.role,
+    };
+    const payload: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(original)) {
+      const next = form[k as keyof typeof form];
+      if (next !== v) payload[k] = next;
+    }
+    if (isSelf) delete payload.role;
+    if (form.password) {
+      if (form.password.length < 8 || form.password.length > 72) {
+        setError("The password must be 8–72 characters.");
+        return;
+      }
+      payload.password = form.password;
+    }
+    const roleNeedsPassword = form.role !== "STAFF" && form.role !== user.role && !user.can_login && !form.password;
+    if (roleNeedsPassword && !extra.revoke_login) {
+      setError(form.role === "KIOSK" ? "A kiosk device account needs a password to sign in on the tablet." : "Set a password: this role must be able to sign in.");
+      return;
+    }
+    Object.assign(payload, extra);
+    if (Object.keys(payload).length === 0) {
+      onClose();
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
-      const payload: Record<string, unknown> = { ...form, ...extra };
-      if (!form.password) delete payload.password;
-      if (isSelf) delete payload.role;
-      // Set a password before a role change so the backend's "operators must
-      // be able to sign in" rule sees it.
-      if (form.role !== user.role && form.password) {
-        await api.patch(`/users/${user.id}`, { password: form.password });
-        delete payload.password;
-      }
       const res = await api.patch<User>(`/users/${user.id}`, payload);
       toast.success("Changes saved", res.data.full_name);
       onSaved(res.data);
@@ -333,7 +404,9 @@ function EditEmployee({ user, isSelf, departments, onClose, onSaved }: { user: U
         <Avatar userId={user.id} name={user.full_name} hasPhoto={user.has_photo} size="h-12 w-12" />
         <div>
           <p className="font-semibold text-white">{user.full_name}</p>
-          <p className="text-xs text-neutral-500">{user.can_login ? "Can sign in to the web app" : "Kiosk only — no web sign-in"}</p>
+          <p className="text-xs text-neutral-500">
+            {user.role === "KIOSK" ? "Kiosk device account — runs the attendance kiosk only" : user.can_login ? "Can sign in to the web app" : "Kiosk only — no web sign-in"}
+          </p>
         </div>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -381,15 +454,19 @@ function EditEmployee({ user, isSelf, departments, onClose, onSaved }: { user: U
             <input className="input" value={form.position} onChange={set("position")} />
           )}
         </Field>
-        <Field label="Role" hint={isSelf ? "You can't change your own role." : undefined}>
+        <Field label="Role" hint={isSelf ? "You can't change your own role." : ROLE_HELP[form.role]}>
           <select className="input" value={form.role} onChange={set("role")} disabled={isSelf}>
             <option value="STAFF">Staff</option>
             <option value="OPERATOR">Operator</option>
             <option value="ADMIN">Admin</option>
+            <option value="KIOSK">Kiosk device</option>
           </select>
         </Field>
-        <Field label={user.can_login ? "Reset password" : "Set password (enables sign-in)"} hint="Leave blank to keep unchanged. Min 8 characters.">
-          <input className="input" type="password" autoComplete="new-password" value={form.password} onChange={set("password")} />
+        <Field
+          label={user.can_login ? "Reset password" : form.role === "KIOSK" ? "Device password *" : "Set password (enables sign-in)"}
+          hint={user.can_login ? "Leave blank to keep unchanged. 8–72 characters." : "8–72 characters."}
+        >
+          <input className="input" type="password" autoComplete="new-password" maxLength={72} value={form.password} onChange={set("password")} />
         </Field>
       </div>
       {user.can_login && !isSelf && user.role === "STAFF" && (

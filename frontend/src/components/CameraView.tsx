@@ -26,6 +26,7 @@ export default function CameraView({
   devices,
   deviceId,
   onSwitchCamera,
+  allowCameraSwitch = true,
   fill = false,
   toolsClass = "right-3 top-3",
   ovalClass = "top-[45%] h-[74%]",
@@ -46,6 +47,8 @@ export default function CameraView({
   devices?: MediaDeviceInfo[];
   deviceId?: string | null;
   onSwitchCamera?: (id: string) => void;
+  /** False hides the camera picker (the kiosk: passers-by must not be able to change the camera). */
+  allowCameraSwitch?: boolean;
   /** Cover the whole parent (no frame, no rounded corners) instead of using `aspect`. */
   fill?: boolean;
   /** Where the IR badge / camera picker sit. */
@@ -55,26 +58,28 @@ export default function CameraView({
   /** Lets the kiosk measure where the face window is, to tell the server which part of the frame to scan. */
   ovalRef?: RefObject<HTMLDivElement>;
 }) {
+  const showPicker = allowCameraSwitch && !!devices && devices.length > 1 && !!onSwitchCamera;
   return (
     <div className={fill ? "absolute inset-0 overflow-hidden bg-black" : `relative w-full overflow-hidden rounded-2xl border border-white/10 bg-black ${aspect}`}>
       {/* Mirrored so moving left moves left on screen, like a mirror */}
       <video ref={videoRef} autoPlay muted playsInline className={`h-full w-full -scale-x-100 object-cover transition-opacity duration-500 ${ready ? "opacity-100" : "opacity-0"}`} />
 
-      {ready && (isInfrared || (devices && devices.length > 1)) && (
+      {ready && (isInfrared || showPicker) && (
         <div className={`absolute z-10 flex items-center gap-2 ${toolsClass}`}>
           {isInfrared && (
             <span className="rounded-full border border-sky-400/30 bg-black/70 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-sky-300 backdrop-blur" title="Using the infrared sensor for capture">
               IR
             </span>
           )}
-          {devices && devices.length > 1 && onSwitchCamera && (
+          {showPicker && (
             <select
               value={deviceId ?? ""}
-              onChange={(e) => onSwitchCamera(e.target.value)}
+              onChange={(e) => onSwitchCamera!(e.target.value)}
+              aria-label="Choose camera"
               className="rounded-full border border-white/10 bg-black/70 px-2.5 py-1 text-[11px] font-medium text-neutral-200 backdrop-blur"
               title="Choose camera"
             >
-              {devices.map((d, i) => (
+              {devices!.map((d, i) => (
                 <option key={d.deviceId} value={d.deviceId}>
                   {d.label || `Camera ${i + 1}`}
                 </option>
@@ -96,9 +101,8 @@ export default function CameraView({
           )}
           <div
             ref={ovalRef}
-            className={`absolute left-1/2 ${ovalClass} w-auto -translate-x-1/2 -translate-y-1/2 rounded-[50%] border-[3px] transition-colors duration-300 ${TONE_RING[tone]} ${
-              scanning ? "shadow-[0_0_60px_-6px_rgba(245,192,0,.6)]" : ""
-            }`}
+            className={`absolute left-1/2 ${ovalClass} w-auto -translate-x-1/2 -translate-y-1/2 rounded-[50%] border-[3px] transition-colors duration-300 ${TONE_RING[tone]} ${scanning ? "shadow-[0_0_60px_-6px_rgba(245,192,0,.6)]" : ""
+              }`}
             style={{ aspectRatio: "0.78" }}
           >
             {scanning && (

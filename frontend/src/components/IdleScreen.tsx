@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { formatDate, formatTime, orgNow, orgParts, useOrgStore } from "../utils/orgTime";
 
 function greet(hour: number) {
   if (hour < 5) return "Burning the midnight oil";
@@ -15,9 +16,10 @@ function greet(hour: number) {
  * activity listeners, so this component needs no dismiss handler itself.
  */
 export default function IdleScreen({ hint = "Move, tap, or press a key to continue" }: { hint?: string }) {
-  const [now, setNow] = useState(new Date());
+  const [now, setNow] = useState(orgNow);
+  useOrgStore((s) => s.timeZone); // re-render when the org timezone arrives
   useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000 * 15);
+    const t = setInterval(() => setNow(orgNow()), 1000 * 15);
     return () => clearInterval(t);
   }, []);
 
@@ -36,13 +38,13 @@ export default function IdleScreen({ hint = "Move, tap, or press a key to contin
           <img src="/logo.png" alt="Ala Eh! Food Products" className="relative h-24 w-24 rounded-full shadow-glow" />
         </div>
         <p className="text-lg font-semibold text-brand-400">
-          {greet(now.getHours())}
+          {greet(orgParts(now).hour)}
           <span className="text-brand-300">.</span>
         </p>
         <p className="mt-2 text-6xl font-extrabold tabular-nums tracking-tight text-white sm:text-7xl">
-          {now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+          {formatTime(now.toISOString())}
         </p>
-        <p className="mt-2 text-base text-neutral-400">{now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</p>
+        <p className="mt-2 text-base text-neutral-400">{formatDate(now, { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</p>
         <p className="mt-10 text-xs font-semibold uppercase tracking-[0.2em] text-neutral-500">{hint}</p>
       </div>
     </div>

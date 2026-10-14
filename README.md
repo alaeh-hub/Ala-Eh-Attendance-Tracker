@@ -118,7 +118,7 @@ An administrator can reset an employee's samples or clear all face enrollments. 
 
 ## Kiosk check-in flow
 
-1. An `ADMIN` or `OPERATOR` signs in and opens `/kiosk`. The kiosk obtains organization-local time and break settings from `/api/recognition/kiosk-config`; it does not rely on the tablet's local clock for attendance policy.
+1. An `ADMIN` or `OPERATOR` signs in and opens `/kiosk`, or a dedicated `KIOSK` device account signs in and lands there directly. Opening the kiosk calls `/api/auth/kiosk/lock`: the server reissues the session as kiosk-locked, so it can only reach the recognition endpoints until someone unlocks it with their password (`KIOSK` accounts can never unlock; an admin signs the device out by deactivating the account). Check-in requires a kiosk-locked session. The kiosk obtains organization-local time and break settings from `/api/recognition/kiosk-config`; it does not rely on the tablet's local clock for attendance policy.
 2. While idle, it can submit a small frame to `/api/recognition/presence`. This performs detection only: it does not identify, embed, store, or create an attendance event.
 3. When a person is in the guide area, the kiosk captures a burst and submits `frames`, `device_id`, optional guide-zone coordinates, and optionally a selected session/punch hint to `/api/recognition/check-in`.
 4. The backend recognizes the face, evaluates passive anti-spoofing, and checks blink liveness. A failed or uncertain attempt returns a status and reason; uncertain scans may be saved as review snapshots. Such responses do not create attendance events.
@@ -135,7 +135,10 @@ Possible check-in outcomes include `NO_FACE`, `NO_MATCH`, `LOW_CONFIDENCE`, `AMB
 - A configured shift end prevents regular clock-in after the shift is over; overtime should be selected explicitly. If someone returns after the break without having recorded an AM clock-out, the system can add an automatic AM clock-out at the break start before recording the PM clock-in.
 - Each of the six session/type combinations is a once-per-day slot. Scanning again for a filled slot returns a verification response rather than writing a duplicate.
 - The cooldown prevents rapid duplicate scans. The re-verification window (default `120` seconds) makes immediate confirmation scans non-writing. Production `.env.example` sets cooldown to `60` seconds, while the application code default is `3` seconds; deployments should set this explicitly.
-- Late status is based on the AM clock-in, the department/global shift start, and `LATE_GRACE_MINUTES`. Reports calculate worked intervals from clock-in/out pairs and subtract overlap with the department's lunch break. OT hours are summarized separately.
+- Punches belong to a **work day**: the date the employee's shift started. Day schedules roll over at midnight. Overnight schedules (end at or before start, e.g. `22:00`-`06:00`) start their work day `WORKDAY_ROLLOVER_BUFFER_HOURS` (default `6`) before the shift, so a `06:05` clock-out pairs with the previous evening's clock-in, and a break such as `02:00`-`03:00` falls inside the same work day. Reports group by work day.
+- Rotating-shift departments match each clock-in to the shift whose start is nearest, within `SHIFT_MATCH_WINDOW_HOURS` (default `4`). No matching shift means no schedule applies and the punch is never late.
+- Late and early-leave minutes, the scheduled start/end and the work day are stamped on each event when it is written, so editing a department later does not rewrite history. Rows from before this change are evaluated against the current schedule. Manual entries and corrections are re-stamped.
+- Late status is based on the first regular clock-in of the work day, the matched schedule (department, rotating shift, or global default), and `LATE_GRACE_MINUTES`. Reports calculate worked intervals from clock-in/out pairs and subtract overlap with the break. OT hours are summarized separately.
 - Admin-entered or corrected attendance bypasses kiosk matching rules and is audited. Staff record queries are restricted to the signed-in employee.
 
 ## Application architecture
@@ -191,8 +194,12 @@ The app calls `db.create_all()` and applies the in-place compatibility updater i
 
 ## Authentication and data protection
 
-- Passwords are stored as bcrypt hashes. The API uses JWT access and refresh tokens. Protected requests reload the user from the database, so role changes, account deactivation, and revoked sign-in take effect on the next request.
-- Role checks are applied by backend route decorators. CORS origins are configured with `CORS_ORIGINS`.
+- Passwords are stored as bcrypt hashes. The short-lived JWT access token is held only in page memory; the refresh token is an `httpOnly` cookie protected by a CSRF double-submit header, so neither is readable from `localStorage`. Reloading the page restores the session from the cookie.
+- Protected requests reload the user from the database. Each user has a `token_version`; changing the password, role, active state or sign-in access bumps it and revokes every existing session. Logout and kiosk lock add the old token to a blocklist (`revoked_tokens`).
+- Roles: `ADMIN`, `OPERATOR`, `STAFF`, and `KIOSK` (a device account that can only run the kiosk). Role checks and the kiosk lock are enforced by backend route decorators; a kiosk-locked session gets `403 KIOSK_LOCKED` everywhere outside the kiosk endpoints.
+- Login, refresh, kiosk unlock, password verification, check-in, presence and enrollment are rate limited (`429` with `Retry-After`), and an email is locked out after repeated failed logins. Limits live in process memory (single worker by design); `RATE_LIMITS_ENABLED=false` disables them.
+- Deleting an employee who has attendance history archives them instead: the account is deactivated and its face data, photo and snapshots are erased, but attendance stays for payroll. Account and department changes are written to the audit log, which "clear all data" keeps.
+- CORS origins are configured with `CORS_ORIGINS`. Production serves the app and API from one origin through Caddy, so this is normally just the site's `https://` address.
 - `FACE_DATA_KEY` enables Fernet encryption at rest for face embeddings, profile thumbnails, and snapshots. Existing plaintext rows remain readable; `backend/tools/encrypt_existing_data.py` can migrate them. Without the key, new biometric data is stored without application-level encryption.
 - In `APP_ENV=production`, startup refuses placeholder/weak Flask or JWT secrets, a missing/invalid biometric encryption key, or SQLite. Use unique secrets of at least 32 characters and back up `FACE_DATA_KEY`; encrypted biometric data cannot be recovered without it.
 - Snapshots are enabled by default. Matched snapshots are retained for `SNAPSHOT_RETENTION_DAYS` (default `90`); other statuses use `SNAPSHOT_UNMATCHED_RETENTION_DAYS` (default `30`). Unmatched snapshots are throttled per device/status. Viewing or resolving review items is an administrative action.
@@ -209,7 +216,7 @@ cd backend
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python seed_admin.py admin@example.com "Admin User" changeme123
+python seed_admin.py admin@example.com "Admin User"   # prompts for the password
 python run.py
 ```
 
@@ -226,21 +233,26 @@ Copy-Item .env.example .env
 npm run dev
 ```
 
+The dev server proxies `/api` and `/socket.io` to `http://localhost:5000` (set `VITE_DEV_PROXY_TARGET` in `frontend/.env` to point elsewhere, e.g. a backend on another machine). Keep the app and API on one origin: the session cookie does not survive a reload cross-origin.
+
 Open `http://localhost:5173`, sign in as the seeded administrator, create employees, record biometric consent, and enroll the required samples. Open the kiosk on a camera-equipped device to record attendance.
 
 To use SFace, put the two YuNet/SFace ONNX files listed in [`backend/models/README.md`](backend/models/README.md) into `backend/models/`. Without them, `FACE_ENGINE=auto` uses dlib. SFace/dlib samples cannot be mixed for matching; changing the active engine requires re-enrollment.
 
 ## Run with Docker Compose
 
-The Compose stack runs PostgreSQL, the backend, and the frontend. Before starting it, copy `backend/.env.example` to `backend/.env`, generate unique secrets, set a PostgreSQL password and matching `DATABASE_URL`, and set `frontend/.env` with the API URL appropriate for the user's browser (typically `http://localhost:5000/api` for a local Compose stack).
+**Production:** follow [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). The stack is Caddy (HTTPS with automatic or internal certificates; the only service publishing ports), the built frontend on unprivileged nginx, the backend under gunicorn/eventlet as a non-root user, PostgreSQL, and a daily `pg_dump` backup service. Browsers only allow camera access over HTTPS (or `localhost`), so kiosks on a LAN need the HTTPS setup described there. Database migrations run automatically when the backend starts (`python manage_db.py upgrade`).
 
 ```powershell
-docker compose up --build
+python backend/tools/generate_secrets.py --write backend/.env   # then edit CORS_ORIGINS
+Copy-Item deploy/env.example .env                               # SITE_ADDRESS, TLS_MODE
+docker compose up -d --build
+docker compose exec backend python seed_admin.py admin@example.com "Admin User"
 ```
 
-The database service has a health check and the backend waits for it. PostgreSQL data persists in the `pgdata` volume; backend logs use `backend-logs`. The model directory is mounted read-only at `/app/models`. The development-oriented frontend service mounts source files for live edits; for a public deployment, configure production frontend serving, TLS termination, trusted origins, backups, and process scaling appropriate to the environment. The documented in-memory behavior means adding backend workers requires shared cache/liveness and Socket.IO coordination.
+**Development:** `docker compose -f docker-compose.dev.yml up --build` runs the Vite dev server with live reload on `http://localhost:5173`, the backend on `127.0.0.1:5000` and PostgreSQL on `127.0.0.1:5432`, with volumes separate from production.
 
-Generate production secrets with `python tools/generate_secrets.py` from `backend/` (or follow the script's `--write` instructions). Keep `.env` files and encryption keys out of source control.
+Keep `.env` files and encryption keys out of source control, and back up `FACE_DATA_KEY` separately from the database backups. Schema changes ship as Alembic migrations in `backend/migrations/`; `python manage_db.py check` verifies that the models and migrations agree.
 
 ## Configuration
 
@@ -269,6 +281,14 @@ The backend reads `.env` / environment variables through `backend/config.py`. Th
 | `ATTENDANCE_COOLDOWN_SECONDS` | `3` in code | Minimum interval before another scan can write an event |
 | `ATTENDANCE_REVERIFY_WINDOW_SECONDS` | `120` | Rescan window that only confirms the previous event |
 | `CORS_ORIGINS` | Local Vite origins | Comma-separated browser origins allowed to call the API |
+| `TRUST_PROXY_HOPS` | `0` | Reverse proxies in front of the backend (`1` behind Caddy); used for client IPs and same-origin checks |
+| `JWT_COOKIE_SECURE` | `true` in production | Send the refresh cookie over HTTPS only |
+| `KIOSK_REFRESH_DAYS` | `30` | How long a kiosk-locked or `KIOSK` device session stays signed in |
+| `RATE_LIMITS_ENABLED` | `true` | In-memory rate limits and login lockout |
+| `WORKDAY_ROLLOVER_BUFFER_HOURS` | `6` | How long before an overnight shift its work day starts |
+| `SHIFT_MATCH_WINDOW_HOURS` | `4` | How far a clock-in may be from a rotating shift's start to match it |
+| `LIVENESS_VERIFY_BLINK_FRAME` | `true` | Require the blink frame to match the recognized person |
+| `SPOOF_CHECK_FRAMES` | `3` | Frames scored by passive anti-spoofing (the worst score counts) |
 
 Threshold overrides are engine-dependent and should only be set after evaluation on representative local cameras and lighting. `backend/tools/evaluate_accuracy.py` evaluates thresholds; `backend/tools/encrypt_existing_data.py` encrypts existing biometric data; `backend/tools/migrate_to_postgres.py` supports moving a local database to PostgreSQL.
 
@@ -278,28 +298,29 @@ All application endpoints are under `/api`; most require a bearer JWT. The backe
 
 | Prefix | Main operations | Access pattern |
 |---|---|---|
-| `/auth` | register (when enabled), login, refresh, current user, password verification | Public login/refresh; other operations authenticated |
+| `/auth` | register (when enabled), login, refresh (cookie), logout, current user, password verification, kiosk lock/unlock | Public login/refresh; other operations authenticated |
 | `/users` | create/list/update/deactivate/delete employees, retrieve profile photo | Primarily admin; staff data is filtered where applicable |
 | `/departments` | list/create/update/delete schedules, roles, shifts, and break settings | Admin management |
 | `/enrollment` | pose sequence/status, readiness check, submit sample, reset samples | Admin |
-| `/recognition` | kiosk config, presence detection, burst check-in | Authenticated kiosk; check-in limited to admin/operator |
+| `/recognition` | kiosk config, presence detection, burst check-in | Kiosk; check-in requires a kiosk-locked admin/operator/`KIOSK` session |
 | `/attendance` | list events, manual add/edit/delete | Staff sees own records; corrections are admin-only and audited |
 | `/reports` | today, daily, hours summary/PDF, CSV, summary, audit | Admin/operator with admin-only reports as enforced per endpoint |
 | `/review` | list/view snapshots, enroll reviewed frame, dismiss/delete | Admin |
 | `/admin` | destructive system administration such as clearing all data | Admin |
+| `/meta` | organization timezone and server time | Authenticated (kiosk allowed) |
 | `/api/health` | database connectivity probe | Health check |
 
-See route decorators and request validation in `backend/app/api/` for exact methods, fields, and role restrictions. Check-in accepts multipart `frames`; each entry is an image file.
+List endpoints for users, attendance and the audit log accept `limit`/`offset` and return the total in an `X-Total-Count` header. See route decorators and request validation in `backend/app/api/` for exact methods, fields, and role restrictions. Check-in accepts multipart `frames`; each entry is an image file.
 
 ## Operations, limitations, and tuning
 
 - Recognition thresholds are starting operating points, not a guarantee of payroll-grade accuracy. Run the included evaluator and a real pilot with the target cameras, distances, employee population, and lighting before operational reliance. Do not tune a threshold from a few successful scans alone.
-- Blink detection rejects still photos and many frozen-image attempts, but a replayed video containing a blink can pass. MiniFASNet adds passive anti-spoofing when installed; even then, validate representative attacks and genuine-user rejection locally.
+- Blink detection rejects still photos and many frozen-image attempts, but a replayed video containing a blink can pass. Liveness is bound to identity: only frames from the same continuous face track as the recognized face count, and the closed-eye frame itself must match the recognized person, so a held-up photo cannot borrow a live person's blink. The default eye-landmark model (dlib 68-point, trained on iBUG 300-W) has non-commercial licence terms; review them before commercial use (`LIVENESS_LANDMARK_MODEL` selects the source). MiniFASNet adds passive anti-spoofing when installed; even then, validate representative attacks and genuine-user rejection locally.
 - The built-in texture heuristic is only a weak signal. In auto mode it is log-only and does not reject users without a MiniFASNet model.
 - Recognition is limited to the currently active engine's samples. If model availability changes such that auto-selection changes engines, old samples will be marked outdated and require re-enrollment.
 - Liveness samples and the embedding index are process memory. The run configuration expects one backend worker; multi-worker deployments need shared state or sticky/central coordination. Socket.IO scaling also needs a message queue.
 - Keep PostgreSQL backups, biometric encryption keys, and model files protected. Define retention and access procedures for face samples and snapshots in line with the organization's privacy requirements.
-- The repository includes tests under `backend/tests/` and `frontend/src/`; tests were not run as part of writing this documentation.
+- Tests: `cd backend; .venv\Scripts\python -m pytest tests -q` and `cd frontend; npm test`. CI (`.github/workflows/ci.yml`) also type-checks, builds both images and checks the migrations against PostgreSQL.
 
 ## Repository map
 

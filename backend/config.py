@@ -28,8 +28,37 @@ class Config:
     APP_ENV = os.environ.get("APP_ENV", "development").strip().lower()
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-me-before-production-use")
     JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "dev-jwt-secret-change-me-before-production-use")
-    JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=12)
-    JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=7)
+    # Access tokens live only in browser memory and are short; the refresh
+    # token is an httpOnly cookie scoped to /api/auth, so page scripts (and
+    # therefore XSS) can never read it.
+    JWT_ACCESS_TOKEN_EXPIRES = timedelta(minutes=int(os.environ.get("JWT_ACCESS_MINUTES", 30)))
+    JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=int(os.environ.get("JWT_REFRESH_DAYS", 7)))
+    # Kiosk devices stay signed in longer so a tablet isn't logged out weekly.
+    KIOSK_REFRESH_DAYS = int(os.environ.get("KIOSK_REFRESH_DAYS", 30))
+    JWT_TOKEN_LOCATION = ["headers", "cookies"]
+    JWT_REFRESH_COOKIE_PATH = "/api/auth"
+    # Access tokens are never put in cookies; this path matches nothing.
+    JWT_ACCESS_COOKIE_PATH = "/api/__no_access_cookie__"
+    JWT_COOKIE_SECURE = _bool("JWT_COOKIE_SECURE", APP_ENV == "production")
+    JWT_COOKIE_SAMESITE = "Strict"
+    JWT_COOKIE_CSRF_PROTECT = True
+    JWT_CSRF_IN_COOKIES = True
+    JWT_REFRESH_CSRF_COOKIE_PATH = "/"
+
+    # Number of reverse proxies in front of the app (Caddy in docker-compose
+    # = 1). Needed so rate limits and logs see the real client IP.
+    TRUST_PROXY_HOPS = int(os.environ.get("TRUST_PROXY_HOPS", 0))
+
+    # Rate limits (in-memory; the app runs as a single worker).
+    RATE_LIMITS_ENABLED = _bool("RATE_LIMITS_ENABLED", True)
+    # Failed sign-ins per email before that account is locked out for
+    # LOGIN_LOCKOUT_MINUTES (per-IP limits apply on top).
+    LOGIN_MAX_FAILURES = int(os.environ.get("LOGIN_MAX_FAILURES", 5))
+    LOGIN_LOCKOUT_MINUTES = int(os.environ.get("LOGIN_LOCKOUT_MINUTES", 15))
+
+    # db.create_all() + the legacy column updater at startup. Convenient in
+    # development; production runs Alembic migrations (manage_db.py) instead.
+    AUTO_CREATE_SCHEMA = _bool("AUTO_CREATE_SCHEMA", APP_ENV != "production")
 
     # Default to SQLite for zero-setup local dev. Swap DATABASE_URL to a
     # postgres:// URI (see docker-compose.yml) for the production stack.
@@ -142,6 +171,14 @@ class Config:
     LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
     LOG_DIR = os.environ.get("LOG_DIR") or os.path.join(os.path.dirname(__file__), "logs")
 
+    # Work days. Overnight schedules start their work day this many hours
+    # before the shift start (22:00 shift -> 16:00..16:00), so a 06:00 time
+    # out pairs with the previous evening's time in.
+    WORKDAY_ROLLOVER_BUFFER_HOURS = float(os.environ.get("WORKDAY_ROLLOVER_BUFFER_HOURS", 6))
+    # Rotating shifts: a clock-in matches the shift whose start is nearest,
+    # within this many hours; otherwise no schedule applies (never late).
+    SHIFT_MATCH_WINDOW_HOURS = float(os.environ.get("SHIFT_MATCH_WINDOW_HOURS", 4))
+
     # Liveness (blink detection).
     LIVENESS_REQUIRED = _bool("LIVENESS_REQUIRED", True)
     LIVENESS_EAR_BLINK_DELTA = float(os.environ.get("LIVENESS_EAR_BLINK_DELTA", 0.06))
@@ -149,6 +186,16 @@ class Config:
     # device are pooled for this many seconds, so a blink in any recent
     # scan counts and the kiosk does not make people start over.
     LIVENESS_WINDOW_SECONDS = float(os.environ.get("LIVENESS_WINDOW_SECONDS", 8))
+    # Re-embed the closed-eye frame and require it to match the recognised
+    # person, so a photo of A can't borrow the blink of a live face B.
+    LIVENESS_VERIFY_BLINK_FRAME = _bool("LIVENESS_VERIFY_BLINK_FRAME", True)
+    # Minimum box overlap between consecutive frames to count as the same face.
+    LIVENESS_TRACK_MIN_IOU = float(os.environ.get("LIVENESS_TRACK_MIN_IOU", 0.3))
+    # Eye-landmark source for blink detection. The default dlib 68-point
+    # model is trained on iBUG 300-W (non-commercial licence terms).
+    LIVENESS_LANDMARK_MODEL = os.environ.get("LIVENESS_LANDMARK_MODEL", "dlib68")
+    # Passive anti-spoof scores this many frames and keeps the worst score.
+    SPOOF_CHECK_FRAMES = int(os.environ.get("SPOOF_CHECK_FRAMES", 3))
 
 
 CONFIG = Config

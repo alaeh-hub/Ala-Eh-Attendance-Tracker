@@ -3,7 +3,9 @@ from app.services.face_service import assess_capture_readiness, enroll_sample, g
 from app.middleware.error_handler import AppError
 from app.extensions import db
 from app.utils.audit import log_action
-from app.utils.auth import require_roles, load_current_user
+from app.models.user import User
+from app.utils.auth import KIOSK_ROLE, require_roles, load_current_user
+from app.utils.ratelimit import rate_limit, user_key
 from app.vision.zone import parse_zone
 
 enrollment_bp = Blueprint("enrollment", __name__)
@@ -69,6 +71,7 @@ def _opt_float(name: str) -> float | None:
 
 @enrollment_bp.post("/check")
 @require_roles("ADMIN")
+@rate_limit("enroll-check", limit=120, per=60, key=user_key)
 def check_readiness():
     """
     Admin-only preview check: scores the current frame's quality/pose
@@ -91,6 +94,7 @@ def check_readiness():
 
 @enrollment_bp.post("/sample")
 @require_roles("ADMIN")
+@rate_limit("enroll-sample", limit=120, per=60, key=user_key)
 def submit_sample():
     """
     Admin-only: accepts one captured frame (multipart field "image") plus a
@@ -102,6 +106,9 @@ def submit_sample():
 
     caller = load_current_user()
     user_id = request.form.get("target_user_id") or caller.id
+    target = db.session.get(User, user_id)
+    if target is not None and target.role == KIOSK_ROLE:
+        raise AppError("Kiosk device accounts don't have a face to enroll.", 400)
     pose = _pose_from_form()
     consent = (request.form.get("consent") or "").lower() in ("1", "true", "yes", "on")
     result = enroll_sample(user_id, request.files["image"].read(), pose_label=pose, consent=consent, actor_id=caller.id,

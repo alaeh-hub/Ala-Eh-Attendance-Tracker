@@ -8,8 +8,10 @@ export interface ClearAllResult {
   face_samples: number;
   review_snapshots: number;
   attendance_events: number;
-  audit_entries: number;
-  kept: { admins: number; operators: number; departments: number };
+  /** No longer returned: the audit log is never cleared. */
+  audit_entries?: number;
+  /** `kiosks`: kiosk device accounts kept alongside operators. */
+  kept: { admins: number; operators: number; kiosks?: number; departments: number };
 }
 
 const DELETED = [
@@ -17,7 +19,6 @@ const DELETED = [
   "All face samples and profile photos",
   "All attendance records and timesheets",
   "The whole review queue and its scan photos",
-  "The audit log history",
 ];
 
 /**
@@ -89,20 +90,23 @@ export default function ClearAllDataDialog({ open, onClose, onDone }: { open: bo
               <Icon name="check" className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" /> Departments and their settings
             </li>
             <li className="flex gap-2">
+              <Icon name="check" className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" /> The audit log (the reset itself is recorded in it)
+            </li>
+            <li className="flex gap-2">
               <Icon name="check" className={`mt-0.5 h-4 w-4 shrink-0 ${removeOperators ? "text-neutral-600" : "text-emerald-300"}`} />
-              <span className={removeOperators ? "line-through opacity-60" : ""}>Operator (kiosk) accounts</span>
+              <span className={removeOperators ? "line-through opacity-60" : ""}>Operator and kiosk device accounts</span>
             </li>
           </ul>
           <label className="mt-3 flex cursor-pointer items-center gap-3 text-neutral-300">
             <input type="checkbox" className="h-5 w-5 cursor-pointer rounded accent-brand-500" checked={removeOperators} onChange={(e) => setRemoveOperators(e.target.checked)} />
-            Also delete operator accounts
+            Also delete operator and kiosk device accounts
           </label>
         </div>
 
         <div className="space-y-3">
           <label className="block">
             <span className="label">Your password</span>
-            <input type="password" className="input" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <input type="password" className="input" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
           </label>
           <label className="block">
             <span className="label">

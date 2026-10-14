@@ -27,6 +27,20 @@ class AttendanceEvent(db.Model):
     device_id = db.Column(db.String(80), nullable=True)
     notes = db.Column(db.String(255), nullable=True)
 
+    # Schedule facts captured when the event was written (or last
+    # corrected), so editing a department later never rewrites history.
+    # All NULL on rows written before this existed; readers then fall back
+    # to computing them from the current schedule.
+    #
+    # work_date: the work day this punch belongs to = the org-local date
+    # the shift STARTED. Differs from the calendar date for night shifts
+    # (a 06:00 time out after a 22:00 start belongs to the previous day).
+    work_date = db.Column(db.Date, nullable=True, index=True)
+    scheduled_start = db.Column(db.String(5), nullable=True)  # "HH:MM" or NULL (no schedule)
+    scheduled_end = db.Column(db.String(5), nullable=True)
+    late_minutes = db.Column(db.Integer, nullable=True)   # 0 = on time; NULL = not an arrival punch
+    early_minutes = db.Column(db.Integer, nullable=True)  # 0 = on time; NULL = not a departure punch
+
     def to_dict(self):
         user = self.user
         return {
@@ -44,4 +58,7 @@ class AttendanceEvent(db.Model):
             "liveness_passed": self.liveness_passed,
             "device_id": self.device_id,
             "notes": self.notes,
+            "work_date": self.work_date.isoformat() if self.work_date else None,
+            "scheduled_start": self.scheduled_start,
+            "scheduled_end": self.scheduled_end,
         }

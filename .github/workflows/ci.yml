@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -14,11 +15,24 @@ permissions:
 
 jobs:
   backend:
+    name: Backend tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: postgres:16.10-alpine
+        env:
+          POSTGRES_USER: attendance
+          POSTGRES_PASSWORD: attendance-ci
+          POSTGRES_DB: attendance
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U attendance -d attendance"
+          --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -33,11 +47,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential cmake libopenblas-dev liblapack-dev libsm6 libxext6
+            build-essential cmake libopenblas-dev liblapack-dev
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r requirements.txt pytest
 
       - name: Run tests
@@ -45,7 +59,22 @@ jobs:
           APP_ENV: development
         run: python -m pytest tests -q
 
+      # Same engine as production: applies every migration to an empty
+      # PostgreSQL and fails if the models have changes with no migration.
+      - name: Migrations apply cleanly and match the models
+        env:
+          APP_ENV: development
+          DATABASE_URL: postgresql+psycopg2://attendance:attendance-ci@localhost:5432/attendance
+        run: python manage_db.py check
+
+      - name: Dependency vulnerability audit (advisory)
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt --progress-spinner off
+
   frontend:
+    name: Frontend typecheck, tests, build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -56,21 +85,68 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - run: npm ci
-      - run: npm test
-      - run: npm run build
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.json
+      - name: Unit tests
+        run: npm test
+      - name: Production build
+        run: npm run build
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=high
 
   docker:
+    name: Container images and compose files
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [backend, frontend]
     steps:
       - uses: actions/checkout@v4
-      - name: Validate compose file
+
+      - name: Validate compose files
         run: |
           cp backend/.env.example backend/.env
-          cp frontend/.env.example frontend/.env
+          cp deploy/env.example .env
           docker compose config -q
+          docker compose -f docker-compose.dev.yml config -q
+
+      - name: Validate Caddyfile
+        run: |
+          caddy() {
+            docker run --rm -e SITE_ADDRESS=attendance.example.com -e TLS_MODE="$1" \
+              -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+              caddy:2.10.2-alpine caddy "$2" --config /etc/caddy/Caddyfile --adapter caddyfile
+          }
+          caddy acme validate
+          caddy internal validate
+          # "files" needs real certificate files to validate; check it parses.
+          caddy files adapt > /dev/null
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          push: false
+          load: true
+          tags: attendance-frontend:ci
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Check nginx config
+        run: docker run --rm attendance-frontend:ci nginx -t
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: false
+          tags: attendance-backend:ci
+          # dlib takes a long time to compile; the layer cache keeps reruns fast.
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend

@@ -1,6 +1,12 @@
+# Keep the build context small and free of local secrets/artefacts.
 node_modules
+**/node_modules
 dist
+coverage
 .env
 .env.*
 !.env.example
 *.tsbuildinfo
+*.log
+Dockerfile
+.dockerignore

@@ -3,6 +3,10 @@ Minimal forward-only schema upgrade for databases created before the
 employee-profile columns existed. db.create_all() never alters existing
 tables, so without this an old attendance.db would crash on startup.
 ALTER TABLE ... ADD COLUMN works the same on SQLite and Postgres.
+
+Production uses Alembic (manage_db.py); this only keeps development
+databases (AUTO_CREATE_SCHEMA) current. Migrations after the baseline
+skip columns this function may already have added.
 """
 from sqlalchemy import inspect, text
 
@@ -10,6 +14,7 @@ from app.extensions import db
 
 _NEW_COLUMNS = {
     "users": {
+        "token_version": "INTEGER NOT NULL DEFAULT 0",
         "employee_code": "VARCHAR(40)",
         "department": "VARCHAR(80)",
         "position": "VARCHAR(80)",
@@ -24,6 +29,11 @@ _NEW_COLUMNS = {
     },
     "attendance_events": {
         "session": "VARCHAR(2)",
+        "work_date": "DATE",
+        "scheduled_start": "VARCHAR(5)",
+        "scheduled_end": "VARCHAR(5)",
+        "late_minutes": "INTEGER",
+        "early_minutes": "INTEGER",
     },
     "departments": {
         "break_start": "VARCHAR(5)",
@@ -54,6 +64,8 @@ def upgrade_schema():
         indexes = {i["name"] for i in inspector.get_indexes("users")}
         if "ix_users_employee_code" not in indexes:
             conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_employee_code ON users (employee_code)"))
+        if inspector.has_table("attendance_events"):
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_attendance_events_work_date ON attendance_events (work_date)"))
 
 
 def _backfill_session(conn):

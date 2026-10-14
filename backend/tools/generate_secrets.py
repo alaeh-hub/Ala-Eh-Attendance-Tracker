@@ -27,8 +27,15 @@ FACE_DATA_KEY={face_key}
 POSTGRES_PASSWORD={db_password}
 DATABASE_URL=postgresql+psycopg2://attendance:{db_password}@db:5432/attendance
 
-# Browsers allowed to call the API (comma separated)
-CORS_ORIGINS=http://localhost:5173
+# Public address of the site (served same-origin through Caddy). Replace
+# the placeholder with your real https:// origin(s), comma separated.
+CORS_ORIGINS=https://attendance.example.com
+# Caddy sits in front of the backend: trust one proxy hop for client IPs.
+TRUST_PROXY_HOPS=1
+# Refresh-token cookie is HTTPS-only.
+JWT_COOKIE_SECURE=true
+# Kiosk device sessions stay signed in this many days.
+KIOSK_REFRESH_DAYS=30
 
 # Organisation
 ORG_TIMEZONE=Asia/Manila

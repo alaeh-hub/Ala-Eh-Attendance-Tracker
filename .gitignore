@@ -4,6 +4,9 @@
 !.env.example
 
 # Runtime data (face embeddings, photos, DB, logs) - never commit
+backups/
+*.dump
+*.dump.partial
 backend/instance/
 backend/logs/
 *.db
@@ -19,9 +22,16 @@ venv/
 .coverage
 htmlcov/
 
+# TLS material for TLS_MODE=files (deploy/certs/cert.pem, key.pem)
+deploy/certs/*
+!deploy/certs/.gitkeep
+*.pem
+*.key
+
 # Node / frontend
 node_modules/
 frontend/dist/
+frontend/coverage/
 *.tsbuildinfo
 
 # Root-level stray lockfile (real one lives in frontend/)

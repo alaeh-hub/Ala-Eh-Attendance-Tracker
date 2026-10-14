@@ -9,7 +9,7 @@ from app.models.user import User
 from app.services.face_service import enroll_sample
 from app.services.snapshot_service import PENDING_STATUSES, purge_old
 from app.utils.audit import log_action
-from app.utils.auth import load_current_user, require_roles
+from app.utils.auth import KIOSK_ROLE, load_current_user, require_roles
 from app.utils.crypto import CryptoError, decrypt_bytes
 
 review_bp = Blueprint("review", __name__)
@@ -77,10 +77,22 @@ def snapshot_image(snapshot_id):
 def enroll_from_snapshot(snapshot_id):
     """Add a reviewed frame as an extra enrollment sample for the chosen employee."""
     snap = _get(snapshot_id)
+    if snap.status == "SPOOF_SUSPECTED":
+        # The frame may be a photo or screen held up to the camera; enrolling
+        # it would teach the system to accept that very attack.
+        raise AppError("This scan was flagged as a possible photo or screen and can't be used as a face sample. "
+                       "Enroll the employee in person instead.", 409, {"code": "SPOOF_SNAPSHOT"})
+    if snap.resolution == "ADDED":
+        raise AppError("This scan was already added as a face sample.", 409)
     data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        raise AppError("A JSON object is required.", 400)
     user_id = data.get("user_id")
-    if not user_id:
+    if not user_id or not isinstance(user_id, str):
         raise AppError("user_id is required.", 400)
+    target = db.session.get(User, user_id)
+    if target is not None and target.role == KIOSK_ROLE:
+        raise AppError("Kiosk device accounts don't have a face to enroll.", 400)
     actor = load_current_user()
 
     result = enroll_sample(user_id, _image(snap), pose_label="review", consent=bool(data.get("consent")), actor_id=actor.id)

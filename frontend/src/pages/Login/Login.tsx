@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { homeFor } from "../../components/AppShell";
 import Icon from "../../components/Icon";
 import { Spinner } from "../../components/ui";
-import api, { errorMessage } from "../../services/api";
+import api, { SessionPayload, errorMessage } from "../../services/api";
 import { useAuthStore } from "../../stores/authStore";
 
 export default function Login() {
@@ -13,21 +13,25 @@ export default function Login() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const user = useAuthStore((s) => s.user);
+  const kioskLocked = useAuthStore((s) => s.kioskLocked);
   const setSession = useAuthStore((s) => s.setSession);
   const navigate = useNavigate();
   const location = useLocation();
 
   useEffect(() => {
-    if (user) navigate((location.state as any)?.from || homeFor(user.role), { replace: true });
-  }, [user, navigate, location.state]);
+    if (!user) return;
+    // A kiosk-locked session (a KIOSK device account) only ever goes to the kiosk.
+    const target = kioskLocked ? "/kiosk" : (location.state as any)?.from || homeFor(user.role);
+    navigate(target, { replace: true });
+  }, [user, kioskLocked, navigate, location.state]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError(null);
     try {
-      const res = await api.post("/auth/login", { email, password });
-      setSession(res.data.user, res.data.access_token, res.data.refresh_token);
+      const res = await api.post<SessionPayload>("/auth/login", { email, password });
+      setSession(res.data);
     } catch (err) {
       setError(errorMessage(err, "Couldn't sign you in. Check your email and password."));
     } finally {

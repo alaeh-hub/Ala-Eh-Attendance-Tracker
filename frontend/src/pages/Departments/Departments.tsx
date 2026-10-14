@@ -16,9 +16,59 @@ const EMPTY_FORM = {
   roles: [] as string[],
 };
 
+function toMinutes(t: string) {
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+}
+
+/** End at or before start means the shift ends the next day (e.g. 22:00–06:00). */
+function isOvernight(start: string | null | undefined, end: string | null | undefined) {
+  return !!start && !!end && toMinutes(end) <= toMinutes(start);
+}
+
+/**
+ * Where a break lies relative to a shift — the same rule the server applies.
+ * Both are measured as offsets from the shift start, so overnight shifts and
+ * breaks crossing midnight (23:30–00:30 in a 22:00–06:00 shift) compare correctly.
+ */
+function breakFit(shiftStart: string, shiftEnd: string, breakStart: string, breakEnd: string): "inside" | "outside" | "straddles" {
+  const day = 24 * 60;
+  const s = toMinutes(shiftStart);
+  const span = (((toMinutes(shiftEnd) - s) % day) + day) % day || day;
+  const b0 = (((toMinutes(breakStart) - s) % day) + day) % day;
+  const b1 = b0 + ((((toMinutes(breakEnd) - toMinutes(breakStart)) % day) + day) % day);
+  if (b1 <= span) return "inside";
+  if (b0 >= span && b1 <= day) return "outside";
+  return "straddles";
+}
+
+/** A one-hour break in the middle of a shift ("HH:MM" pair). */
+function middleBreak(start: string, end: string): [string, string] {
+  const day = 24 * 60;
+  const s = toMinutes(start);
+  const span = (((toMinutes(end) - s) % day) + day) % day || day;
+  const b0 = (s + Math.floor(span / 2 / 30) * 30 - 30 + day) % day;
+  const fmt = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  return [fmt(b0), fmt((b0 + 60) % day)];
+}
+
+function NextDay({ start, end }: { start: string | null | undefined; end: string | null | undefined }) {
+  if (!isOvernight(start, end)) return null;
+  return (
+    <span className="ml-1 rounded bg-indigo-500/15 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-indigo-200" title="Ends the next day">
+      +1 day
+    </span>
+  );
+}
+
 function formatRange(start: string | null, end: string | null) {
   if (!start || !end) return "—";
-  return `${start} – ${end}`;
+  return (
+    <>
+      {start} – {end}
+      <NextDay start={start} end={end} />
+    </>
+  );
 }
 
 export default function Departments() {
@@ -40,6 +90,7 @@ export default function Departments() {
   useEffect(load, []);
 
   async function remove(dept: Department) {
+    if (busy) return;
     setBusy(true);
     try {
       await api.delete(`/departments/${dept.id}`);
@@ -105,6 +156,7 @@ export default function Departments() {
                           {d.shifts.map((s) => (
                             <span key={s.name} className="chip bg-sky-500/10 text-sky-300 ring-1 ring-sky-500/25">
                               {s.name}: {s.start_time}–{s.end_time}
+                              <NextDay start={s.start_time} end={s.end_time} />
                             </span>
                           ))}
                         </div>
@@ -131,10 +183,10 @@ export default function Departments() {
                     <td className="table-cell text-neutral-300">{d.employee_count}</td>
                     <td className="table-cell">
                       <div className="flex justify-end gap-1">
-                        <button onClick={() => setEditing(d)} className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-white/10 hover:text-white" title="Edit">
+                        <button onClick={() => setEditing(d)} className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-white/10 hover:text-white" title="Edit" aria-label={`Edit ${d.name}`}>
                           <Icon name="edit" className="h-4 w-4" />
                         </button>
-                        <button onClick={() => setConfirm(d)} className="rounded-lg p-2 text-neutral-500 transition-colors hover:bg-red-500/10 hover:text-red-300" title="Delete">
+                        <button onClick={() => setConfirm(d)} className="rounded-lg p-2 text-neutral-500 transition-colors hover:bg-red-500/10 hover:text-red-300" title="Delete" aria-label={`Delete ${d.name}`}>
                           <Icon name="trash" className="h-4 w-4" />
                         </button>
                       </div>
@@ -181,7 +233,7 @@ export default function Departments() {
           </>
         }
         onConfirm={() => confirm && remove(confirm)}
-        onClose={() => setConfirm(null)}
+        onClose={() => !busy && setConfirm(null)}
       />
     </>
   );
@@ -207,9 +259,28 @@ function DepartmentForm({ department, onClose, onSaved }: { department: Departme
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [shiftError, setShiftError] = useState<string | null>(null);
+
   function addShift() {
-    if (!shiftDraft.name.trim()) return;
-    setForm((f) => ({ ...f, shifts: [...f.shifts, { ...shiftDraft, name: shiftDraft.name.trim() }] }));
+    const name = shiftDraft.name.trim();
+    if (!name) {
+      setShiftError("Give the shift a name.");
+      return;
+    }
+    if (!shiftDraft.start_time || !shiftDraft.end_time) {
+      setShiftError("Enter a start and an end time.");
+      return;
+    }
+    if (shiftDraft.start_time === shiftDraft.end_time) {
+      setShiftError("A shift can't start and end at the same time.");
+      return;
+    }
+    if (form.shifts.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
+      setShiftError(`There is already a shift named "${name}".`);
+      return;
+    }
+    setShiftError(null);
+    setForm((f) => ({ ...f, shifts: [...f.shifts, { ...shiftDraft, name }] }));
     setShiftDraft({ name: "", start_time: "08:00", end_time: "17:00" });
   }
 
@@ -228,7 +299,45 @@ function DepartmentForm({ department, onClose, onSaved }: { department: Departme
     setForm((f) => ({ ...f, roles: f.roles.filter((r) => r !== name) }));
   }
 
+  const fixedOvernight = !form.has_shifting && isOvernight(form.start_time, form.end_time);
+
+  /** Why the break doesn't fit the schedule (mirrors the server's check), or null. */
+  function breakProblem(): string | null {
+    const { break_start: bs, break_end: be } = form;
+    if (!bs || !be) return "Enter a break start and end time.";
+    if (bs === be) return "Break end must be after break start.";
+    if (!form.has_shifting && form.start_time && form.end_time && form.start_time !== form.end_time) {
+      if (breakFit(form.start_time, form.end_time, bs, be) !== "inside")
+        return `The ${bs}–${be} break must fall inside the ${form.start_time}–${form.end_time} working hours.`;
+    }
+    if (form.has_shifting) {
+      const bad = form.shifts.find((sh) => sh.start_time !== sh.end_time && breakFit(sh.start_time, sh.end_time, bs, be) === "straddles");
+      if (bad) return `The ${bs}–${be} break overlaps the start or end of the "${bad.name}" shift (${bad.start_time}–${bad.end_time}).`;
+    }
+    return null;
+  }
+  const breakIssue = breakProblem();
+
+  /**
+   * Change the fixed working hours. If the break no longer fits (typically the default 12:00–13:00
+   * left on a 22:00–06:00 night schedule), move it to the middle of the new hours.
+   */
+  function setHours(patch: { start_time?: string; end_time?: string }) {
+    setForm((f) => {
+      const next = { ...f, ...patch };
+      if (next.start_time && next.end_time && next.start_time !== next.end_time && next.break_start && next.break_end && next.break_start !== next.break_end) {
+        if (breakFit(next.start_time, next.end_time, next.break_start, next.break_end) !== "inside") {
+          const [bs, be] = middleBreak(next.start_time, next.end_time);
+          next.break_start = bs;
+          next.break_end = be;
+        }
+      }
+      return next;
+    });
+  }
+
   async function save() {
+    if (saving) return;
     setError(null);
     if (!form.name.trim()) {
       setError("A department name is required.");
@@ -238,8 +347,18 @@ function DepartmentForm({ department, onClose, onSaved }: { department: Departme
       setError("Add at least one shift, or turn off shifting.");
       return;
     }
-    if (form.break_end <= form.break_start) {
-      setError("Break end must be after break start.");
+    if (!form.has_shifting) {
+      if (!form.start_time || !form.end_time) {
+        setError("Enter a start and an end time.");
+        return;
+      }
+      if (form.start_time === form.end_time) {
+        setError("The workday can't start and end at the same time.");
+        return;
+      }
+    }
+    if (breakIssue) {
+      setError(breakIssue);
       return;
     }
     setSaving(true);
@@ -302,12 +421,17 @@ function DepartmentForm({ department, onClose, onSaved }: { department: Departme
 
           {!form.has_shifting ? (
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              <Field label="AM start time">
-                <input className="input" type="time" value={form.start_time} onChange={(e) => setForm((f) => ({ ...f, start_time: e.target.value }))} />
+              <Field label="Start time">
+                <input className="input" type="time" value={form.start_time} onChange={(e) => setHours({ start_time: e.target.value })} />
               </Field>
-              <Field label="PM end time">
-                <input className="input" type="time" value={form.end_time} onChange={(e) => setForm((f) => ({ ...f, end_time: e.target.value }))} />
+              <Field label="End time" hint={fixedOvernight ? "Ends the next day (overnight schedule)." : "An end at or before the start means an overnight schedule."}>
+                <input className="input" type="time" value={form.end_time} onChange={(e) => setHours({ end_time: e.target.value })} />
               </Field>
+              {fixedOvernight && (
+                <p className="rounded-xl bg-indigo-500/10 px-3 py-2 text-xs text-indigo-200 sm:col-span-2" role="status">
+                  Overnight: {form.start_time} until {form.end_time} the next morning. Punches after midnight count toward the day the shift started.
+                </p>
+              )}
             </div>
           ) : (
             <div className="mt-4 animate-fade-in">
@@ -318,8 +442,9 @@ function DepartmentForm({ department, onClose, onSaved }: { department: Departme
                       <span className="font-semibold text-white">{s.name}</span>
                       <span className="text-neutral-400">
                         {s.start_time} – {s.end_time}
+                        <NextDay start={s.start_time} end={s.end_time} />
                       </span>
-                      <button type="button" onClick={() => removeShift(i)} className="rounded-lg p-1 text-neutral-500 hover:bg-red-500/10 hover:text-red-300" aria-label="Remove shift">
+                      <button type="button" onClick={() => removeShift(i)} className="rounded-lg p-1 text-neutral-500 hover:bg-red-500/10 hover:text-red-300" aria-label={`Remove shift ${s.name}`}>
                         <Icon name="close" className="h-4 w-4" />
                       </button>
                     </li>
@@ -340,6 +465,18 @@ function DepartmentForm({ department, onClose, onSaved }: { department: Departme
                   <Icon name="plus" className="h-4 w-4" /> Add
                 </button>
               </div>
+              <p className="mt-2 text-xs text-neutral-500">
+                {isOvernight(shiftDraft.start_time, shiftDraft.end_time) ? (
+                  <span className="text-indigo-200">This shift ends the next day (overnight).</span>
+                ) : (
+                  "An end at or before the start means the shift ends the next day (e.g. 22:00–06:00)."
+                )}
+              </p>
+              {shiftError && (
+                <p role="alert" className="mt-2 text-xs text-red-300">
+                  {shiftError}
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -348,7 +485,16 @@ function DepartmentForm({ department, onClose, onSaved }: { department: Departme
           <p className="text-sm font-semibold text-white">Lunch break</p>
           <p className="mb-4 text-xs text-neutral-500">
             Not counted as worked time. An employee can time out for lunch and back in, or stay scanned straight through — either way this window is excluded automatically.
-            {!form.has_shifting && <> E.g. AM in {form.start_time || "08:00"} → break {form.break_start}–{form.break_end} → PM out {form.end_time || "17:00"}.</>}
+            {!form.has_shifting && (
+              <>
+                {" "}
+                E.g. in {form.start_time || "08:00"} → break {form.break_start}–{form.break_end} → out {form.end_time || "17:00"}
+                {fixedOvernight && " (next day)"}.
+              </>
+            )}{" "}
+            {form.has_shifting
+              ? "Shifts share this break: a shift may lie entirely outside it, but the break must not overlap a shift's start or end."
+              : "The break must fall inside the working hours — for a night shift, put it inside the shift (it may cross midnight, e.g. 01:00–02:00 or 23:30–00:30)."}
           </p>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Break start">
@@ -358,6 +504,11 @@ function DepartmentForm({ department, onClose, onSaved }: { department: Departme
               <input className="input" type="time" value={form.break_end} onChange={(e) => setForm((f) => ({ ...f, break_end: e.target.value }))} />
             </Field>
           </div>
+          {breakIssue && (
+            <p className="mt-3 text-xs text-orange-300" role="status">
+              {breakIssue}
+            </p>
+          )}
         </div>
 
         <Field label="Job roles in this department" hint="These become dropdown options when enrolling an employee in this department.">
@@ -376,6 +527,7 @@ function DepartmentForm({ department, onClose, onSaved }: { department: Departme
           <div className="flex gap-2">
             <input
               className="input"
+              aria-label="New job role"
               value={roleDraft}
               onChange={(e) => setRoleDraft(e.target.value)}
               onKeyDown={(e) => {
