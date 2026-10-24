@@ -278,10 +278,16 @@ export function useCamera() {
       const video = videoRef.current;
       if (!video || !video.videoWidth) return resolve(null);
       const scale = Math.min(1, maxWidth / video.videoWidth);
+      const width = Math.round(video.videoWidth * scale);
+      const height = Math.round(video.videoHeight * scale);
       const canvas = (canvasRef.current ??= document.createElement("canvas"));
-      canvas.width = Math.round(video.videoWidth * scale);
-      canvas.height = Math.round(video.videoHeight * scale);
-      const ctx = canvas.getContext("2d");
+      // Assigning a size, even the same one, clears the canvas and reallocates it.
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+      // Every capture reads the picture straight back out as a JPEG. A canvas made for frequent readback
+      // (CPU-backed) does that in a few ms; the default GPU-backed one stalls on every readback (measured:
+      // ~1300 ms against ~25 ms for the same capture). The option only takes effect on a canvas' first getContext.
+      const ctx = canvas.getContext("2d", { willReadFrequently: true } as CanvasRenderingContext2DSettings);
       if (!ctx) return resolve(null);
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       canvas.toBlob((blob) => resolve(blob), "image/jpeg", quality);

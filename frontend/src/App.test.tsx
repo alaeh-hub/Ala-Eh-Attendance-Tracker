@@ -49,7 +49,11 @@ describe("route guards", () => {
     post.mockReset();
     refreshSession.mockReset();
     hasRefreshCookie.mockReset().mockReturnValue(false);
-    get.mockResolvedValue({ data: { items: [], total: 0, pending_count: 0 }, headers: {} });
+    // The Records page's endpoints answer with plain arrays; the other pages read a page object.
+    get.mockImplementation(async (url: string) => ({
+      data: ["/attendance", "/reports/daily", "/users/departments"].includes(url) ? [] : { items: [], total: 0, pending_count: 0 },
+      headers: {},
+    }));
     post.mockResolvedValue({ data: {} });
     signIn(null);
   });

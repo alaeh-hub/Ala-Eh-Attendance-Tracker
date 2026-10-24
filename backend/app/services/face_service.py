@@ -22,7 +22,7 @@ from app.vision.liveness import blink_candidate, frame_ear, get_eye_landmark_sou
 from app.vision.matcher import classify_match
 from app.vision.pose import assess_pose
 from app.vision.quality import assess_quality
-from app.vision.zone import ENROLL_MIN_FACE_TO_OVAL, MOVE_CLOSER, MOVE_INTO_CIRCLE, faces_in_zone, inside_zone, too_small
+from app.vision.zone import ENROLL_MIN_FACE_TO_OVAL, MARGIN as ZONE_MARGIN, MOVE_CLOSER, MOVE_INTO_CIRCLE, faces_in_zone, inside_zone, too_small
 
 logger = logging.getLogger("app.enrollment")
 
@@ -167,13 +167,72 @@ def reset_all_enrollments() -> dict:
     return {"deleted_count": deleted_count, "photos_cleared": photos_cleared}
 
 
-def _enrollment_face(engine, image, zone):
+# --------------------------------------------------------------------------
+# Development-only detection details
+#
+# The enrollment check and the kiosk check-in can describe what the detector saw (every face
+# with its box and 5 landmarks, the one that was used, the guide oval, quality and pose numbers)
+# so the frontend's debug overlay can draw it. It is for developing the app: a production server
+# never produces it, whatever the client asks for.
+# --------------------------------------------------------------------------
+
+def debug_allowed() -> bool:
+    return current_app.config.get("APP_ENV") != "production"
+
+
+def _face_debug(face, chosen) -> dict:
+    top, right, bottom, left = face.box
+    data = {"box": [int(left), int(top), int(right), int(bottom)], "score": round(float(face.score), 3), "chosen": face is chosen}
+    if face.landmarks is not None:
+        data["landmarks"] = [[round(float(x), 1), round(float(y), 1)] for x, y in face.landmarks]
+    return data
+
+
+def _detections_debug(image, faces, chosen, zone, **extra) -> dict:
+    """What the detector saw in one frame, in that frame's own pixel coordinates."""
+    img_h, img_w = image.shape[:2]
+    return {
+        "image": {"w": int(img_w), "h": int(img_h)},
+        "faces": [_face_debug(f, chosen) for f in faces],
+        "zone": {"cx": zone.cx, "cy": zone.cy, "rx": zone.rx, "ry": zone.ry, "margin": ZONE_MARGIN} if zone else None,
+        **extra,
+    }
+
+
+def detect_for_debug(image_bytes: bytes, zone=None) -> dict:
+    """
+    Development only (see debug_allowed): what the detector sees in ONE frame and which face the
+    kiosk would go on to scan, for the frontend's live debug overlay. Nothing is embedded, matched,
+    stored or logged. The face is chosen by the same rules a kiosk scan uses.
+    """
+    started = time.perf_counter()
+    image = decode_image(image_bytes)
+    engine = active_engine()
+    faces = engine.detect(image, current_app.config["DETECTION_WIDTH"])
+    img_h, img_w = image.shape[:2]
+
+    candidates, reason, chosen = faces, None, None
+    if zone:
+        candidates = faces_in_zone(zone, faces, img_w, img_h)
+        if faces and not candidates:
+            reason = MOVE_INTO_CIRCLE
+    if reason is None:
+        chosen, reason = pick_single_face(candidates, allow_dominant=True)
+        if chosen is not None and zone and too_small(zone, chosen.box, img_h):
+            chosen, reason = None, MOVE_CLOSER
+    return _detections_debug(image, faces, chosen, zone, live=True, engine=engine.name, reason=reason, ms=_ms(started))
+
+
+def _enrollment_face(engine, image, zone, debug: dict | None = None):
     """The single face to enrol from a frame, honouring the guide oval:
     faces outside it are ignored, and the face must be big enough for it.
-    Returns (face, error message)."""
+    Returns (face, error message). `debug`, when given, is filled with what was detected."""
     cfg = current_app.config
     candidates = engine.detect(image, cfg["DETECTION_WIDTH"])
+    detected = candidates
     img_h, img_w = image.shape[:2]
+    if debug is not None:
+        debug.update(_detections_debug(image, detected, None, zone))
     if zone:
         inside = faces_in_zone(zone, candidates, img_w, img_h)
         if candidates and not inside:
@@ -182,6 +241,8 @@ def _enrollment_face(engine, image, zone):
     face, err = pick_single_face(candidates, allow_dominant=False)
     if err:
         return None, err
+    if debug is not None:
+        debug.update(_detections_debug(image, detected, face, zone))
     if zone and too_small(zone, face.box, img_h, ENROLL_MIN_FACE_TO_OVAL):
         return None, MOVE_CLOSER
     return face, None
@@ -279,7 +340,7 @@ def enroll_sample(user_id: str, image_bytes: bytes, pose_label: str = None,
 
 def assess_capture_readiness(image_bytes: bytes, pose_label: str | None,
                              baseline: tuple[float, float] | None = None,
-                             reference: float | None = None, zone=None) -> dict:
+                             reference: float | None = None, zone=None, debug: dict | None = None) -> dict:
     """
     Lightweight preview check used while the employee is framing a shot:
     detects the face and scores quality + rough pose, WITHOUT running the
@@ -296,7 +357,7 @@ def assess_capture_readiness(image_bytes: bytes, pose_label: str | None,
     cfg = current_app.config
     engine = active_engine()
     image = decode_image(image_bytes)
-    face, err = _enrollment_face(engine, image, zone)
+    face, err = _enrollment_face(engine, image, zone, debug)
     if err:
         return {"ready": False, "score": 0.0, "reason": err, "yaw": None, "pitch": None}
 
@@ -305,6 +366,10 @@ def assess_capture_readiness(image_bytes: bytes, pose_label: str | None,
     pose = assess_pose(face, pose_label or "frontal", baseline=baseline, reference=reference)
     score = round((0.5 * quality["score"] + 0.5 * pose["progress"]) if quality["ok"] else 0.0, 3)
     angles = {"yaw": pose["yaw"], "pitch": pose["pitch"]}
+    if debug is not None:
+        debug["quality"] = {"ok": bool(quality["ok"]), "score": round(float(quality["score"]), 3), "reason": quality["reason"]}
+        debug["pose"] = {"ok": bool(pose["ok"]), "progress": round(float(pose["progress"]), 3), "reason": pose["reason"],
+                         "yaw": pose["yaw"], "pitch": pose["pitch"], "label": pose_label or "frontal"}
 
     if not quality["ok"]:
         return {"ready": False, "score": score, "reason": quality["reason"], **angles}
@@ -388,7 +453,7 @@ def _embed_frame(engine, cfg, obs: "_Observation"):
     return embedding / norm if norm > 0 else None
 
 
-def recognize_burst(frames: list[bytes], zone=None) -> dict:
+def recognize_burst(frames: list[bytes], zone=None, debug: dict | None = None) -> dict:
     """
     Recognises one person from a short burst of frames.
 
@@ -417,6 +482,9 @@ def recognize_burst(frames: list[bytes], zone=None) -> dict:
 
     With a `zone` (the kiosk's guide oval, see app.vision.zone) faces outside
     it are ignored and a face that is too small for it is asked to come closer.
+
+    `debug`, when given (development only, see debug_allowed), is filled with what the detector saw
+    in the most recent frame that had a face to look at.
     """
     cfg = current_app.config
     engine = active_engine()
@@ -440,8 +508,12 @@ def recognize_burst(frames: list[bytes], zone=None) -> dict:
         face = engine.track(image, previous, cfg["DETECTION_WIDTH"]) if previous else None
         if face is not None and zone and not (inside_zone(zone, face.box, img_w, img_h) and not too_small(zone, face.box, img_h)):
             face = None  # the tracked face wandered out of the circle: look again from scratch
+        seen = [face] if face is not None else []
         if face is None:
             candidates = engine.detect(image, cfg["DETECTION_WIDTH"])
+            seen = candidates
+            if debug is not None:
+                debug.update(_detections_debug(image, seen, None, zone, frame=index, frames=len(frames)))
             if zone:
                 inside = faces_in_zone(zone, candidates, img_w, img_h)
                 if candidates and not inside:
@@ -455,6 +527,8 @@ def recognize_burst(frames: list[bytes], zone=None) -> dict:
             if zone and too_small(zone, face.box, img_h):
                 last_reason, previous, track_box = MOVE_CLOSER, None, None
                 continue
+        if debug is not None:
+            debug.update(_detections_debug(image, seen, face, zone, frame=index, frames=len(frames)))
         previous = face
         if not _same_track(track_box, face.box, min_iou):
             track_id += 1

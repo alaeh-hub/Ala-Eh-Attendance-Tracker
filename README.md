@@ -116,6 +116,40 @@ The default low-confidence bands are `0.08` for SFace and `0.05` for dlib. The s
 
 An administrator can reset an employee's samples or clear all face enrollments. Resetting enrollment removes the vectors and profile image; it does not delete the employee record or attendance history.
 
+### Spoken prompts
+
+The capture screen is full-screen like the kiosk and also speaks each pose ("Turn slightly left"), because turning the head means looking away from the screen. The phrases are listed in `frontend/src/utils/voiceClips.json`. Each one plays the recording `frontend/public/voice/<key>.mp3` and falls back to the browser's own voice when that file is missing, so the screen works the same with or without recordings. The Sound button on the capture screen turns the chimes and voice on or off.
+
+Every step of enrollment and of scanning is spoken (the phrases are in `voiceClips.json`):
+
+- **Enrollment:** each pose as it comes up (after "Captured." or "Samples cleared."), the consent request, a blocked duplicate face, "please wait" when the server rate-limits, "re-enrollment needed", "try again" when a capture is refused, and "all poses captured".
+- **Kiosk:** "Look at the camera" when Start scan is pressed. Then, for the result, "Time in. Thank you." or "Time out. Thank you." for what was actually recorded (the server may overrule the button that was pressed), "Verified. Your attendance is recorded." when a scan re-confirms a punch, and "Already recorded." in the cooldown. While a scan is not yet settled it asks the person to blink, hold still, move into the circle or closer, or come one at a time. It also says when it can't confirm who they are, doesn't recognize them, needs a live face, or couldn't record the punch (no connection, or the server refused it). It says nothing to an empty room.
+
+Prompts that come back on every scan (blink, hold still, move) are spoken at most once every 6 seconds. A spoken result starts just after the success or error chime. The kiosk has no mute button, because passers-by must not be able to change it; its volume is the tablet's.
+To create the recordings once, for free and offline, with [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) (an open Apache-2.0 text-to-speech model; no account or key, and nothing leaves the computer). The model, about 350 MB, is downloaded once into `~/.cache/kokoro-onnx`:
+
+```powershell
+cd frontend
+py -3.11 -m venv .voice-venv                              # kept out of the app; it is only used to make the clips
+.voice-venv\Scripts\pip install -r scripts/requirements-voice.txt
+.voice-venv\Scripts\python scripts/generate_voice_local.py --dry-run     # list what would be generated
+.voice-venv\Scripts\python scripts/generate_voice_local.py               # af_heart, only the clips that don't exist yet
+.voice-venv\Scripts\python scripts/generate_voice_local.py --list-voices
+.voice-venv\Scripts\python scripts/generate_voice_local.py --voice bf_emma --speed 0.9 --force
+```
+
+An [Azure Speech](https://learn.microsoft.com/azure/ai-services/speech-service/) alternative is `npm run voice` (needs `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`; see `scripts/generate-voice.mjs`). It offers Philippine English and Filipino voices.
+
+Commit the generated MP3s. They can equally be recorded by a person: save each phrase as `public/voice/<key>.mp3`. Changing a phrase in `voiceClips.json` needs its clip regenerated (`--force`), since the app plays the file and not the text.
+### Debug overlay (development only)
+
+While developing, the enrollment capture screen and the kiosk can draw what the server's face detector saw over the camera picture: every face box (green = the face that was used, dashed orange = seen but ignored), the five landmarks (right eye, left eye, nose, mouth corners), the guide oval (cyan) and the wider area the server accepts (dashed), with a readout beside it. Enrollment shows yaw, pitch, the pose progress and the quality score; the kiosk shows the match score against the threshold, the runner-up, the votes and the frame it is describing. It is how you see why something said "Move closer" or "Hold still", or whether the oval lines up with the camera.
+
+- **On** automatically in the Vite dev server (`npm run dev`); on any other build with `?debug=1` in the address. The **Hide** button on its panel switches it off for the session (the page then stops asking for the data).
+- The pages ask for it with a `debug=1` form field on `POST /api/enrollment/check` and `POST /api/recognition/check-in`. A server with `APP_ENV=production` ignores the field and sends nothing, so it cannot leak from a deployed system; the panel then says "The server sent no debug data".
+- **Live on the kiosk.** Before Start scan is pressed the kiosk has no scan to describe, so while the debug view is on the page sends a small frame to `POST /api/recognition/debug-detect` about every 120 ms and draws the answer. It asks the server's own detector, so what you see is what a scan would see, including why a scan would be refused ("Move into the circle", "Multiple faces"). It pauses while a scan is in flight, on the idle screen and behind the password prompt. A scan's own numbers (score against the threshold, runner-up, votes) stay under the live ones as "last scan". Enrollment already checks continuously, so it needs no extra requests. A server with `APP_ENV=production` answers that endpoint with 404.
+- **How live is it?** The server's detector takes about 15-20 ms a frame and a round trip about 40 ms, so on a machine that isn't starved the overlay updates up to about eight times a second, and the boxes and dots glide between readings. It still trails a fast head movement by the length of one round trip. A genuinely smooth 30 fps overlay would need the detector to run in the browser; the readings here come from the server on purpose, so they are exactly what the server decides with.
+
 ## Kiosk check-in flow
 
 1. An `ADMIN` or `OPERATOR` signs in and opens `/kiosk`, or a dedicated `KIOSK` device account signs in and lands there directly. Opening the kiosk calls `/api/auth/kiosk/lock`: the server reissues the session as kiosk-locked, so it can only reach the recognition endpoints until someone unlocks it with their password (`KIOSK` accounts can never unlock; an admin signs the device out by deactivating the account). Check-in requires a kiosk-locked session. The kiosk obtains organization-local time and break settings from `/api/recognition/kiosk-config`; it does not rely on the tablet's local clock for attendance policy.
@@ -219,6 +253,10 @@ pip install -r requirements.txt
 python seed_admin.py admin@example.com "Admin User"   # prompts for the password
 python run.py
 ```
+
+If `backend/.env` is the production config (it points `DATABASE_URL` at the Docker host `db`),
+create `backend/.env.local` with `APP_ENV=development` and `DATABASE_URL=sqlite:///attendance.db`.
+It is loaded before `.env`, is gitignored and is never copied into the Docker image.
 
 The API listens on `http://localhost:5000`. The default SQLite database is created under Flask's instance directory. Create the initial administrator once; do not use the example password outside a local machine.
 

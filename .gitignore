@@ -1,7 +1,10 @@
 # Secrets / local config
 .env
 .env.*
+frontend/.env
+frontend/.env.*
 !.env.example
+!frontend/.env.example
 
 # Runtime data (face embeddings, photos, DB, logs) - never commit
 backups/
@@ -17,6 +20,7 @@ backend/logs/
 __pycache__/
 *.py[cod]
 .venv/
+.voice-venv/
 venv/
 .pytest_cache/
 .coverage

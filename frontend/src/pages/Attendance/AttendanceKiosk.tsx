@@ -2,17 +2,22 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { homeFor } from "../../components/AppShell";
 import CameraView, { CameraTone } from "../../components/CameraView";
+import FaceDebugOverlay from "../../components/FaceDebugOverlay";
 import Icon from "../../components/Icon";
 import IdleScreen from "../../components/IdleScreen";
 import { Avatar, EventBadge, Modal, Spinner, formatTime } from "../../components/ui";
 import { frameDifference, useCamera } from "../../hooks/useCamera";
 import { WAKE_EVENT, useIdle } from "../../hooks/useIdle";
 import { useOnline } from "../../hooks/useOnline";
+import { useLiveDetection } from "../../hooks/useLiveDetection";
+import { SHORT_SCREEN, useOvalFit } from "../../hooks/useOvalFit";
 import { usePresenceWake } from "../../hooks/usePresenceWake";
 import api, { errorMessage } from "../../services/api";
 import { useAuthStore } from "../../stores/authStore";
 import type { AttendanceEvent, CheckInResult } from "../../types";
+import { useFaceDebug } from "../../utils/faceDebug";
 import { guideZone } from "../../utils/guideZone";
+import { chime, preloadVoice, say, sayOnce, stopSpeaking, useAudioUnlock } from "../../utils/sound";
 import { BreakWindow, Direction, NOON, Session, defaultSession, sessionAllowed, sessionHint, toMinutes } from "../../utils/kioskSessions";
 import { formatDate, formatTime as formatOrgTime, orgMinutesNow, orgNow, orgParts, useOrgStore } from "../../utils/orgTime";
 
@@ -26,6 +31,10 @@ const SUCCESS_HOLD_MS = 4000;
 // the employee has to actually read why it was changed.
 const CORRECTED_HOLD_MS = 7000;
 const NOTICE_HOLD_MS = 4000;
+// The spoken confirmation starts once the two-note chime has finished, so they don't talk over each other.
+const VOICE_AFTER_CHIME_MS = 400;
+// Prompts that come back on every scan ("please blink", "hold still") are spoken at most this often.
+const PROMPT_VOICE_GAP_MS = 6000;
 // With nobody touching the kiosk for this long, the idle screen (logo, greeting, clock) covers it.
 const KIOSK_IDLE_MS = 60_000;
 // After the idle screen is dismissed, taps are ignored for a moment so the wake-up tap
@@ -57,44 +66,6 @@ function deviceId() {
     return id;
   } catch {
     return "kiosk";
-  }
-}
-
-// One AudioContext for the kiosk's lifetime: browsers cap how many can exist, and a new one per
-// chime eventually stops making sound. It starts "suspended" until the first user gesture.
-let audioCtx: AudioContext | null = null;
-function audio(): AudioContext | null {
-  if (audioCtx) return audioCtx;
-  try {
-    const Ctor = window.AudioContext || (window as any).webkitAudioContext;
-    audioCtx = Ctor ? new Ctor() : null;
-  } catch {
-    audioCtx = null;
-  }
-  return audioCtx;
-}
-
-function chime(success: boolean) {
-  try {
-    const ctx = audio();
-    if (!ctx) return;
-    if (ctx.state === "suspended") ctx.resume().catch(() => undefined);
-    const notes = success ? [880, 1318.5] : [330, 262];
-    notes.forEach((freq, i) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = freq;
-      const t = ctx.currentTime + i * 0.12;
-      gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(0.18, t + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
-      osc.connect(gain).connect(ctx.destination);
-      osc.start(t);
-      osc.stop(t + 0.3);
-    });
-  } catch {
-    /* audio is optional */
   }
 }
 
@@ -170,6 +141,20 @@ export default function AttendanceKiosk() {
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
   const ovalRef = useRef<HTMLDivElement>(null);
+  const topBarRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+  // The face window takes the room between the top bar (and the prompt under it) and the controls.
+  const ovalStyle = useOvalFit({
+    container: containerRef,
+    top: topBarRef,
+    bottom: dockRef,
+    // The prompt pill sits under the top bar (beside it on a short screen). The floor is the size the oval had before it was measured.
+    topReserve: (c) => (c.height <= SHORT_SCREEN ? 0 : c.width >= 640 ? 156 : 140),
+    floorShare: (c) => (c.height <= SHORT_SCREEN ? 0.46 : c.width > c.height ? 0.56 : c.width >= 640 ? 0.5 : 0.42),
+  });
+  // Development only: what the server's detector saw, drawn over the camera.
+  const faceDebug = useFaceDebug();
+  const { wants: wantsDebug, report: reportDebug } = faceDebug;
   const holdUntil = useRef(0);
   const streak = useRef({ noMatch: 0, unsure: 0 });
   const device = useRef(deviceId());
@@ -248,6 +233,7 @@ export default function AttendanceKiosk() {
       const form = new FormData();
       frames.forEach((b, i) => form.append("frames", b, `f${i}.jpg`));
       form.append("device_id", device.current);
+      if (wantsDebug()) form.append("debug", "1");
       const zone = guideZone(videoRef.current, ovalRef.current);
       if (zone) form.append("zone", JSON.stringify(zone));
       const punch = overridePunch(statusOverrideRef.current);
@@ -256,11 +242,14 @@ export default function AttendanceKiosk() {
       const started = performance.now();
       const { data } = await api.post<CheckInResult>("/recognition/check-in", form);
       setLastMs(Math.round(performance.now() - started));
+      reportDebug(data.debug);
 
       switch (data.status) {
         case "MATCHED": {
           streak.current = { noMatch: 0, unsure: 0 };
           chime(true);
+          // Say what was actually recorded: the server may have overruled the button that was pressed.
+          say(data.event!.event_type === "CLOCK_IN" ? "kiosk.time_in" : "kiosk.time_out", VOICE_AFTER_CHIME_MS);
           setDirection(null);
           setRecent((r) => [data.event!, ...r].slice(0, 6));
           const ms = data.corrected ? CORRECTED_HOLD_MS : SUCCESS_HOLD_MS;
@@ -272,6 +261,7 @@ export default function AttendanceKiosk() {
         }
         case "COOLDOWN":
           streak.current = { noMatch: 0, unsure: 0 };
+          say("kiosk.already_recorded");
           hold(
             { kind: "notice", title: `Already recorded, ${data.user_name?.split(" ")[0] ?? ""}`, text: data.reason || "", tone: "warn", event: data.event, name: data.user_name, userId: data.user_id, hasPhoto: data.has_photo },
             NOTICE_HOLD_MS
@@ -280,17 +270,20 @@ export default function AttendanceKiosk() {
         case "VERIFIED":
           streak.current = { noMatch: 0, unsure: 0 };
           chime(true);
+          say("kiosk.verified", VOICE_AFTER_CHIME_MS);
           hold(
             { kind: "notice", title: `Verified, ${data.user_name?.split(" ")[0] ?? ""}`, text: data.reason || "", tone: "warn", event: data.event, name: data.user_name, userId: data.user_id, hasPhoto: data.has_photo },
             NOTICE_HOLD_MS
           );
           return NOTICE_HOLD_MS;
         case "LIVENESS_FAILED":
+          sayOnce("kiosk.blink", PROMPT_VOICE_GAP_MS);
           setPhase({ kind: "prompt", text: `Hi ${data.first_name ?? "there"}! Please blink 👀`, tone: "scanning" });
           return 0;
         case "SPOOF_SUSPECTED":
           streak.current = { noMatch: 0, unsure: 0 };
           chime(false);
+          say("kiosk.live_face", VOICE_AFTER_CHIME_MS);
           hold({ kind: "notice", title: "Live face required", text: data.reason || "Photos and screens are not accepted. Face the camera directly.", tone: "error" }, NOTICE_HOLD_MS);
           return NOTICE_HOLD_MS;
         case "LOW_CONFIDENCE":
@@ -298,9 +291,11 @@ export default function AttendanceKiosk() {
           streak.current.unsure += 1;
           if (streak.current.unsure >= 4) {
             streak.current.unsure = 0;
+            say("kiosk.cant_confirm");
             hold({ kind: "notice", title: "Can't confirm who you are", text: data.reason || "Face the camera directly in good light, remove sunglasses or mask, and hold still.", tone: "warn" }, NOTICE_HOLD_MS);
             return NOTICE_HOLD_MS;
           }
+          sayOnce("kiosk.hold_still", PROMPT_VOICE_GAP_MS);
           setPhase({ kind: "prompt", text: data.reason || "Hold still and look at the camera", tone: "scanning" });
           return 150;
         case "NO_MATCH":
@@ -308,6 +303,7 @@ export default function AttendanceKiosk() {
           if (streak.current.noMatch >= 2) {
             streak.current.noMatch = 0;
             chime(false);
+            say("kiosk.not_recognized", VOICE_AFTER_CHIME_MS);
             hold({ kind: "notice", title: "Not recognized", text: "You don't appear to be enrolled. Please see an administrator.", tone: "error" }, NOTICE_HOLD_MS);
             return NOTICE_HOLD_MS;
           }
@@ -316,6 +312,9 @@ export default function AttendanceKiosk() {
         case "NO_FACE":
         default:
           streak.current = { noMatch: 0, unsure: 0 };
+          // Nothing is said when there is simply nobody there; only when someone needs to move or be alone.
+          if (data.reason?.startsWith("Multiple")) sayOnce("kiosk.one_person", PROMPT_VOICE_GAP_MS);
+          else if (data.reason?.startsWith("Move")) sayOnce(data.reason.includes("closer") ? "kiosk.move_closer" : "kiosk.move_circle", PROMPT_VOICE_GAP_MS);
           setPhase(
             data.reason?.startsWith("Multiple")
               ? { kind: "prompt", text: "One person at a time, please", tone: "warn" }
@@ -327,6 +326,7 @@ export default function AttendanceKiosk() {
       }
     } catch (err: any) {
       chime(false);
+      say(err?.response ? "kiosk.not_recorded" : "kiosk.no_connection", VOICE_AFTER_CHIME_MS);
       if (!err?.response) hold({ kind: "notice", title: "Connection problem", text: CONNECTION_ERROR_TEXT, tone: "error" }, NOTICE_HOLD_MS);
       else hold({ kind: "notice", title: "Not recorded", text: errorMessage(err, "Check-in failed. Please try again."), tone: "error" }, NOTICE_HOLD_MS);
       return NOTICE_HOLD_MS;
@@ -334,7 +334,7 @@ export default function AttendanceKiosk() {
       inFlight.current = false;
       setBusy(false);
     }
-  }, [captureBurst, videoRef]);
+  }, [captureBurst, videoRef, wantsDebug, reportDebug]);
 
   // Scanning loop — only runs once armed by pressing Start (see `auto`
   // above). Keeps scanning the person in front of the camera until a
@@ -361,19 +361,11 @@ export default function AttendanceKiosk() {
     };
   }, [auto, ready, online, scanOnce]);
 
-  // Browsers only let audio play after a user gesture: wake the shared AudioContext on the first one.
+  useAudioUnlock();
+  // Fetch the spoken confirmations ahead of time so the first one isn't late; leaving the kiosk silences a pending one.
   useEffect(() => {
-    const unlockAudio = () => {
-      audio()?.resume().catch(() => undefined);
-      window.removeEventListener("pointerdown", unlockAudio);
-      window.removeEventListener("keydown", unlockAudio);
-    };
-    window.addEventListener("pointerdown", unlockAudio);
-    window.addEventListener("keydown", unlockAudio);
-    return () => {
-      window.removeEventListener("pointerdown", unlockAudio);
-      window.removeEventListener("keydown", unlockAudio);
-    };
+    preloadVoice();
+    return stopSpeaking;
   }, []);
 
   function pickDirection(d: Direction) {
@@ -390,6 +382,7 @@ export default function AttendanceKiosk() {
     holdUntil.current = 0;
     setPhase({ kind: "idle" });
     setAuto(true);
+    say("kiosk.start");
   }
 
   function toggleFullscreen() {
@@ -403,6 +396,15 @@ export default function AttendanceKiosk() {
   // The idle screen never covers a scan or a result in progress, nor the password prompt;
   // when any of those ends, the idle countdown starts afresh.
   const idle = useIdle(KIOSK_IDLE_MS, auto || busy || phase.kind !== "idle" || unlockOpen);
+  // Development only: follow the face continuously, even before Start scan is pressed. It stands down while a scan request
+  // is in flight (that answer carries its own reading), on the idle screen, and behind the password prompt.
+  useLiveDetection({
+    enabled: faceDebug.available && faceDebug.on && ready && online && !busy && !idle && !unlockOpen,
+    captureFrame,
+    videoRef,
+    ovalRef,
+    report: reportDebug,
+  });
   const wasIdle = useRef(false);
   useEffect(() => {
     if (idle) {
@@ -480,14 +482,17 @@ export default function AttendanceKiosk() {
         isInfrared={isInfrared}
         allowCameraSwitch={false}
         toolsClass="right-4 top-24 sm:top-28"
+        // Until the real layout has been measured (see useOvalFit), these percentages stand in for it.
         ovalClass="top-[42%] h-[42%] sm:top-[44%] sm:h-[50%] [@media(orientation:landscape)_and_(min-height:521px)]:top-[46%] [@media(orientation:landscape)_and_(min-height:521px)]:h-[56%] [@media(max-height:520px)]:top-[43%] [@media(max-height:520px)]:h-[46%]"
+        ovalStyle={ovalStyle}
         overlay={
           <>
+            <FaceDebugOverlay debug={faceDebug} kind="scan" />
             <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-black/70 to-transparent" />
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-72 bg-gradient-to-t from-black/70 to-transparent" />
 
             {/* Top bar: clock on the left, window controls on the right */}
-            <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-3 px-[max(1rem,env(safe-area-inset-left))] pt-[max(1rem,env(safe-area-inset-top))] sm:px-6 sm:pt-6">
+            <div ref={topBarRef} className="absolute inset-x-0 top-0 flex items-start justify-between gap-3 px-[max(1rem,env(safe-area-inset-left))] pt-[max(1rem,env(safe-area-inset-top))] sm:px-6 sm:pt-6">
               <div className="flex min-w-0 items-center gap-3 sm:gap-4">
                 <img src="/logo.png" alt="Ala Eh! Food Products" className="h-12 w-12 shrink-0 rounded-full shadow-glow sm:h-16 sm:w-16 lg:h-20 lg:w-20 [@media(max-height:520px)]:!h-11 [@media(max-height:520px)]:!w-11" />
                 <LiveClock />
@@ -554,6 +559,7 @@ export default function AttendanceKiosk() {
             {showControls && (
               <div className="absolute inset-x-0 bottom-0 flex justify-center px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-6">
                 <div
+                  ref={dockRef}
                   className={`${glass} grid w-full max-w-3xl gap-3 rounded-3xl p-3 sm:p-4 [@media(orientation:landscape)_and_(min-width:700px)]:grid-cols-[1fr_36%] [@media(max-height:520px)]:grid-cols-[1fr_36%] [@media(max-height:520px)]:gap-2 [@media(max-height:520px)]:p-2`}
                 >
                   <div className="flex min-w-0 flex-col gap-2">

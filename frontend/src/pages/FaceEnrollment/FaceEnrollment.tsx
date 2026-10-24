@@ -4,13 +4,17 @@ import { useUserSearch } from "../../components/admin/EmployeePicker";
 import { isCancelled, retryAfterSeconds } from "../../components/admin/request";
 import { ROLE_HELP } from "../../components/admin/roles";
 import CameraView, { CameraTone } from "../../components/CameraView";
+import FaceDebugOverlay from "../../components/FaceDebugOverlay";
 import Icon from "../../components/Icon";
 import { Avatar, ConfirmDialog, Field, PageHeader, RoleBadge, Spinner, forgetPhoto } from "../../components/ui";
 import { useCamera } from "../../hooks/useCamera";
+import { SHORT_SCREEN, useOvalFit } from "../../hooks/useOvalFit";
 import api, { errorMessage } from "../../services/api";
 import { toast } from "../../stores/toastStore";
 import type { Department, EnrollmentStatus, Role, User } from "../../types";
+import { type FaceDebug, useFaceDebug } from "../../utils/faceDebug";
 import { guideZone } from "../../utils/guideZone";
+import { type VoiceKey, chime, isVoiceKey, preloadVoice, say, sayOnce, speak, stopSpeaking, useAudioUnlock } from "../../utils/sound";
 
 const POSES: Record<string, { title: string; hint: string; arrow?: string }> = {
   frontal: { title: "Look straight ahead", hint: "Face the camera, neutral expression" },
@@ -23,8 +27,20 @@ const POSES: Record<string, { title: string; hint: string; arrow?: string }> = {
 const AUTO_CAPTURE_INTERVAL_MS = 700;
 /** After a rejected capture, wait this long before readiness (and so auto-capture) resumes. */
 const REJECT_PAUSE_MS = 1500;
+// How long a banner stays up: a success is a quick confirmation, anything else has to be read.
+const SUCCESS_NOTICE_MS = 1600;
+const NOTICE_MS = 4500;
+// A capture that keeps being refused would otherwise repeat "try again" every couple of seconds.
+const RETRY_VOICE_GAP_MS = 8000;
+// The spoken confirmation starts once the two-note chime has finished, so they don't talk over each other.
+const VOICE_AFTER_CHIME_MS = 400;
+// "Captured." / "Samples cleared." is spoken in front of the next pose, if that pose comes up within this long.
+const LEAD_IN_MS = 3000;
 
 type Step = 1 | 2 | 3;
+
+/** What the capture screen tells the person being enrolled (a banner, plus a chime). */
+type Notice = { tone: "success" | "warn" | "error"; title: string; text?: string };
 
 type Calibration = { baselineYaw?: number; baselinePitch?: number; leftYaw?: number; upPitch?: number };
 const calibrationKey = (userId: string) => `enroll_calibration_${userId}`;
@@ -110,8 +126,13 @@ export default function FaceEnrollment() {
 
   return (
     <>
-      <PageHeader title="Enroll employee" subtitle="Register an employee's details and face so they can clock in at the kiosk." />
-      <Stepper step={step} />
+      {/* The capture step takes over the whole screen, like the kiosk, so the header and stepper step aside. */}
+      {step !== 2 && (
+        <>
+          <PageHeader title="Enroll employee" subtitle="Register an employee's details and face so they can clock in at the kiosk." />
+          <Stepper step={step} />
+        </>
+      )}
       {step === 1 && (
         <EmployeeStep
           onReady={(u) => {
@@ -391,6 +412,33 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
   const [resetting, setResetting] = useState(false);
   const [readiness, setReadiness] = useState<{ ready: boolean; score: number; reason: string | null } | null>(null);
   const [finishing, setFinishing] = useState(false);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [soundOn, setSoundOn] = useState(true);
+  const [fullscreen, setFullscreen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const topBarRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+  // The face window takes the room between the top bar (and the pose banner under it) and the controls.
+  const ovalStyle = useOvalFit({
+    container: containerRef,
+    top: topBarRef,
+    bottom: dockRef,
+    // The pose banner sits under the top bar (beside it on a short screen). The floor is the size the oval had before it was measured.
+    topReserve: (c) => (c.height <= SHORT_SCREEN ? 56 : c.width >= 640 ? 216 : 200),
+    floorShare: (c) => (c.height <= SHORT_SCREEN ? 0.52 : c.width > c.height ? 0.44 : c.width >= 640 ? 0.46 : 0.44),
+  });
+  // Development only: what the server's detector saw, drawn over the camera.
+  const faceDebug = useFaceDebug();
+  const { wants: wantsDebug, report: reportDebug } = faceDebug;
+  // Read through a ref so toggling sound never changes the capture callback (and so never resets auto-capture timers).
+  const soundRef = useRef(true);
+  soundRef.current = soundOn;
+  useAudioUnlock();
+  useEffect(() => preloadVoice(), []);
+  const lastRetryVoice = useRef(0);
+  const leadIn = useRef<{ key: VoiceKey; at: number } | null>(null);
+  // "All done" is only worth saying when this person just finished the last pose, not when an already complete enrollment is reopened.
+  const capturedThisSession = useRef(false);
   const busyRef = useRef(false);
   const checkingRef = useRef(false);
   // The first frame that passed the readiness check for the current pose, with the head angles
@@ -416,11 +464,35 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
     return res.data;
   }, [employee.id]);
 
+  /** Show a banner and, unless sound is off, play the matching chime. */
+  const notify = useCallback((n: Notice, opts?: { silent?: boolean }) => {
+    setNotice(n);
+    if (soundRef.current && !opts?.silent) chime(n.tone === "success");
+  }, []);
+
   useEffect(() => {
     api.get("/enrollment/poses").then((r) => setPoses(r.data.poses)).catch(() => undefined);
-    refreshStatus().catch(() => toast.error("Couldn't load enrollment progress"));
+    refreshStatus().catch(() => notify({ tone: "error", title: "Couldn't load progress", text: "Check the connection and try again." }));
     start();
-  }, [refreshStatus, start]);
+  }, [refreshStatus, start, notify]);
+
+  // Banners clear themselves: a success quickly, anything else once there has been time to read it.
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), notice.tone === "success" ? SUCCESS_NOTICE_MS : NOTICE_MS);
+    return () => clearTimeout(t);
+  }, [notice]);
+
+  useEffect(() => {
+    const onFs = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, []);
+
+  function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else containerRef.current?.requestFullscreen?.();
+  }
 
   const remaining = poses.filter((p) => !captured.includes(p));
   const currentPose = remaining[0];
@@ -462,7 +534,10 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
         if (base === "right" && cal.leftYaw !== undefined) form.append("reference_yaw", String(cal.leftYaw));
         if (base === "down" && cal.upPitch !== undefined) form.append("reference_pitch", String(cal.upPitch));
 
-        const res = await api.post<{ ready: boolean; score: number; reason: string | null; yaw: number | null; pitch: number | null }>("/enrollment/check", form);
+        if (wantsDebug()) form.append("debug", "1");
+
+        const res = await api.post<{ ready: boolean; score: number; reason: string | null; yaw: number | null; pitch: number | null; debug?: FaceDebug }>("/enrollment/check", form);
+        reportDebug(res.data.debug);
         // A check that was already in flight when a capture got rejected (or a 429 arrived) is stale.
         if (cancelled || busyRef.current || Date.now() < pauseUntilRef.current) return;
         setReadiness(res.data);
@@ -484,6 +559,8 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
           readyFrameRef.current = null;
           setReadiness(null);
           setHint({ text: `Too many checks — pausing for ${Math.ceil(wait)} s.`, tone: "warn" });
+          notify({ tone: "warn", title: "Please wait a moment", text: `Too many checks. Pausing for ${Math.ceil(wait)} s.` }, { silent: true });
+          if (soundRef.current) sayOnce("enroll.wait", RETRY_VOICE_GAP_MS);
         }
         /* other failures are transient — the next tick retries */
       } finally {
@@ -496,7 +573,7 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
       cancelled = true;
       clearInterval(t);
     };
-  }, [ready, currentPose, blocking, allPosesDone, captureFrame, videoRef]);
+  }, [ready, currentPose, blocking, allPosesDone, captureFrame, videoRef, notify, wantsDebug, reportDebug]);
 
   /** Record calibration from a frame whose sample the server accepted (never from a rejected one). */
   const commitCalibration = useCallback(
@@ -542,7 +619,11 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
       setFlash(true);
       setReadiness(null);
       setTimeout(() => setFlash(false), 350);
-      setHint({ text: `Captured · quality ${Math.round(res.data.quality_score * 100)}%`, tone: "success" });
+      capturedThisSession.current = true;
+      leadIn.current = { key: "enroll.captured", at: Date.now() };
+      const quality = Math.round(res.data.quality_score * 100);
+      setHint({ text: `Captured · quality ${quality}%`, tone: "success" });
+      notify({ tone: "success", title: "Captured", text: `Quality ${quality}%` });
     } catch (err: any) {
       const code = err?.response?.data?.code;
       const msg = errorMessage(err, "Capture rejected — try again.");
@@ -553,16 +634,27 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
       if (code === "DUPLICATE_FACE" || code === "INCONSISTENT_FACE") {
         setBlocking(msg);
         setAuto(false);
+        if (soundRef.current) {
+          chime(false);
+          say("enroll.blocked", 400);
+        }
       } else if (wait !== null) {
         setHint({ text: `Too many attempts — pausing for ${Math.ceil(wait)} s.`, tone: "warn" });
+        notify({ tone: "warn", title: "Please wait a moment", text: `Too many attempts. Pausing for ${Math.ceil(wait)} s.` });
+        if (soundRef.current) sayOnce("enroll.wait", RETRY_VOICE_GAP_MS, 400);
       } else {
         setHint({ text: msg, tone: "warn" });
+        notify({ tone: "warn", title: "Not captured", text: msg });
+        if (soundRef.current && Date.now() - lastRetryVoice.current > RETRY_VOICE_GAP_MS) {
+          lastRetryVoice.current = Date.now();
+          say("retry");
+        }
       }
     } finally {
       busyRef.current = false;
       setBusy(false);
     }
-  }, [captureFrame, currentPose, employee.id, blocking, consent, videoRef, commitCalibration]);
+  }, [captureFrame, currentPose, employee.id, blocking, consent, videoRef, commitCalibration, notify]);
 
   // Auto-capture: only fires once the live readiness check says the pose
   // and quality are good, giving the employee time to get into position
@@ -577,6 +669,35 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
   useEffect(() => {
     if (allPosesDone) stop();
   }, [allPosesDone, stop]);
+
+  // Turning the head means looking away from the screen, so each new pose is also spoken, after
+  // "Captured." (or "Samples cleared.") when that is what led to it, and after the chime for it.
+  const outdatedCount = status?.outdated_samples ?? 0;
+  useEffect(() => {
+    if (!soundOn || !ready || !currentPose || blocking || !consentOk || outdatedCount > 0) return;
+    const lead = leadIn.current && Date.now() - leadIn.current.at < LEAD_IN_MS ? leadIn.current.key : null;
+    leadIn.current = null;
+    const key = `pose.${currentPose}`;
+    if (isVoiceKey(key)) {
+      if (lead) say([lead, key], VOICE_AFTER_CHIME_MS);
+      else say(key);
+    } else speak(POSES[currentPose]?.title ?? "Look at the camera"); // a pose the server added that has no recording yet
+    return stopSpeaking;
+  }, [soundOn, ready, currentPose, blocking, consentOk, outdatedCount]);
+
+  // The other steps that stop the capture and need someone to act.
+  const awaitingConsent = !!status && !consentOk;
+  useEffect(() => {
+    if (soundOn && awaitingConsent && !blocking) say("enroll.consent");
+  }, [soundOn, awaitingConsent, blocking]);
+
+  useEffect(() => {
+    if (soundOn && outdatedCount > 0 && !blocking && !awaitingConsent) say("enroll.outdated");
+  }, [soundOn, outdatedCount, blocking, awaitingConsent]);
+
+  useEffect(() => {
+    if (allPosesDone && capturedThisSession.current && soundRef.current) say("done");
+  }, [allPosesDone]);
 
   async function reset() {
     if (resetting) return;
@@ -593,10 +714,11 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
       setHint(null);
       forgetPhoto(employee.id);
       setConfirmReset(false);
-      toast.success("Samples cleared", "Start capturing again.");
+      leadIn.current = { key: "enroll.cleared", at: Date.now() };
+      notify({ tone: "success", title: "Samples cleared", text: "Start capturing again." });
       start();
     } catch (err) {
-      toast.error("Couldn't clear samples", errorMessage(err));
+      notify({ tone: "error", title: "Couldn't clear samples", text: errorMessage(err) });
     } finally {
       setResetting(false);
     }
@@ -611,220 +733,265 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
       forgetPhoto(employee.id);
       onDone(res.data);
     } catch (err) {
-      toast.error("Couldn't finish enrollment", errorMessage(err, "Check the connection and try again. The captured samples are saved."));
+      notify({ tone: "error", title: "Couldn't finish enrollment", text: errorMessage(err, "Check the connection and try again. The captured samples are saved.") });
       setFinishing(false);
     }
   }
 
   const pose = currentPose ? POSES[currentPose] ?? { title: "Look at the camera", hint: "" } : null;
-  const pct = Math.min(100, Math.round((count / Math.max(minRequired, 1)) * 100));
+  const poseNumber = Math.min(captured.length + 1, poses.length);
+
+  // The same glass styling as the kiosk's controls.
+  const glass = "border border-white/10 bg-black/55 backdrop-blur-md";
+  const hudBtn = `${glass} flex h-12 min-w-12 items-center justify-center gap-2 rounded-full px-4 text-base font-semibold text-white transition-colors hover:bg-black/75 active:scale-95`;
+  const dockBtn =
+    "flex h-14 min-w-14 items-center justify-center gap-2 rounded-2xl px-4 text-base font-bold transition-all active:scale-[.97] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 sm:h-16 sm:text-lg";
+  const ghostBtn = `${dockBtn} border border-white/15 bg-white/[0.06] text-neutral-100 hover:bg-white/10`;
+
+  const needsConsent = !!status && !status.consent_recorded && !consent;
+  const outdated = status?.outdated_samples ?? 0;
+  // One thing at a time takes over the screen; the banner and controls step aside for it.
+  const panelOpen = !!blocking || needsConsent || outdated > 0 || allPosesDone;
+  const showBanner = !panelOpen && (!!notice || (ready && !!pose));
+
+  const noticeStyle = {
+    success: { box: "border-emerald-400/50", badge: "bg-emerald-500 text-black", icon: "check" as const },
+    warn: { box: "border-orange-400/50", badge: "bg-orange-500 text-black", icon: "alert" as const },
+    error: { box: "border-red-500/50", badge: "bg-red-500 text-white", icon: "x_circle" as const },
+  };
 
   return (
-    <div className="grid items-start gap-6 lg:grid-cols-[1fr_360px] animate-fade-up">
-      <div className="card p-3 sm:p-4">
-        {/* The instruction sits above the picture so it can never cover the face. */}
-        {pose && ready && !blocking && !allPosesDone && (
-          <div className="mb-3 flex items-center gap-4 rounded-2xl border border-brand-500/30 bg-brand-500/[0.08] p-3 sm:p-4">
-            <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-brand-500 text-3xl font-black text-black sm:h-16 sm:w-16 sm:text-4xl">
-              {pose.arrow ?? <Icon name="scan" className="h-8 w-8" strokeWidth={2.2} />}
-            </span>
-            <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-wider text-brand-300">
-                Pose {Math.min(captured.length + 1, poses.length)} of {poses.length}
-              </p>
-              <p className="text-xl font-extrabold leading-tight text-white sm:text-2xl">{pose.title}</p>
-              <p className="text-sm text-neutral-300">{pose.hint}</p>
-            </div>
+    <div ref={containerRef} className="fixed inset-0 z-40 touch-manipulation select-none overflow-hidden bg-black animate-fade-in">
+      <CameraView
+        fill
+        ovalRef={ovalRef}
+        videoRef={videoRef}
+        ready={ready && !allPosesDone}
+        starting={starting}
+        onStart={allPosesDone ? undefined : start}
+        tone={blocking || notice?.tone === "error" ? "error" : notice?.tone ?? (busy ? "scanning" : readiness?.ready ? "success" : "idle")}
+        scanning={busy}
+        isInfrared={isInfrared}
+        devices={devices}
+        deviceId={deviceId}
+        onSwitchCamera={switchCamera}
+        toolsClass="right-4 top-24 sm:top-28"
+        // Until the real layout has been measured (see useOvalFit), these percentages stand in for it.
+        ovalClass="top-[50%] h-[44%] sm:top-[51%] sm:h-[46%] [@media(orientation:landscape)_and_(min-height:521px)]:top-[53%] [@media(orientation:landscape)_and_(min-height:521px)]:h-[44%] [@media(max-height:520px)]:top-[52%] [@media(max-height:520px)]:h-[52%]"
+        ovalStyle={ovalStyle}
+        overlay={flash ? <div className="absolute inset-0 bg-white/40 animate-fade-in" /> : undefined}
+      />
+      <FaceDebugOverlay debug={faceDebug} kind="enroll" />
+
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-black/70 to-transparent" />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-72 bg-gradient-to-t from-black/70 to-transparent" />
+
+      {/* Top bar: who is being enrolled on the left, window controls on the right */}
+      <div ref={topBarRef} className="absolute inset-x-0 top-0 flex items-start justify-between gap-3 px-[max(1rem,env(safe-area-inset-left))] pt-[max(1rem,env(safe-area-inset-top))] sm:px-6 sm:pt-6">
+        <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+          <Avatar userId={employee.id} name={employee.full_name} hasPhoto={!!status?.has_photo} size="h-12 w-12 sm:h-16 sm:w-16" text="text-base" version={count} ring />
+          <div className="min-w-0 drop-shadow">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-400">Enrolling</p>
+            <p className="truncate text-xl font-extrabold leading-tight text-white sm:text-3xl">{employee.full_name}</p>
+            <p className="truncate text-xs text-neutral-300 sm:text-sm">{[employee.employee_code, employee.department].filter(Boolean).join(" · ")}</p>
           </div>
-        )}
-        <CameraView
-          ovalRef={ovalRef}
-          aspect="aspect-[4/5] sm:aspect-[4/3]"
-          videoRef={videoRef}
-          ready={ready && !allPosesDone}
-          starting={starting}
-          onStart={allPosesDone ? undefined : start}
-          tone={blocking ? "error" : hint?.tone ?? (busy ? "scanning" : "idle")}
-          scanning={busy}
-          isInfrared={isInfrared}
-          devices={devices}
-          deviceId={deviceId}
-          onSwitchCamera={switchCamera}
-          overlay={
-            <>
-              {flash && <div className="absolute inset-0 bg-white/40 animate-fade-in" />}
-              {allPosesDone && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 animate-fade-in">
-                  <span className="rounded-full bg-emerald-500 p-4 text-black animate-scale-in">
-                    <Icon name="check" className="h-8 w-8" strokeWidth={3} />
-                  </span>
-                  <p className="text-lg font-bold text-white">All poses captured</p>
-                  <p className="text-sm text-neutral-400">Camera turned off.</p>
-                </div>
-              )}
-            </>
-          }
-        />
-
-        {cameraError && (
-          <p role="alert" className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-            {cameraError}
-          </p>
-        )}
-
-        {blocking && (
-          <div role="alert" className="mt-3 rounded-xl border border-red-500/40 bg-red-500/10 p-4 animate-fade-in">
-            <p className="flex items-center gap-2 font-semibold text-red-200">
-              <Icon name="shield" className="h-4 w-4" /> Capture blocked for accuracy
-            </p>
-            <p className="mt-1 text-sm text-red-300/90">{blocking}</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button className="btn-ghost py-2 text-xs" onClick={() => { setBlocking(null); setHint(null); }}>
-                Dismiss &amp; retry
-              </button>
-              <button className="btn-ghost py-2 text-xs" onClick={onBack}>
-                Choose a different employee
-              </button>
-            </div>
-          </div>
-        )}
-
-        {hint && !blocking && (
-          <p
-            role="status"
-            className={`mt-3 flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm animate-fade-in ${
-              hint.tone === "success" ? "bg-emerald-500/10 text-emerald-300" : "bg-orange-500/10 text-orange-300"
-            }`}
-          >
-            <Icon name={hint.tone === "success" ? "check" : "info"} className="h-4 w-4" /> {hint.text}
-          </p>
-        )}
-
-        {!blocking && ready && !allPosesDone && readiness && (
-          <div className="mt-3 animate-fade-in">
-            <div className="flex items-center gap-3 rounded-xl bg-white/[0.04] px-4 py-2.5">
-              <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/[0.08]">
-                <div
-                  className={`h-full rounded-full transition-all duration-200 ${readiness.ready ? "bg-emerald-400" : "bg-orange-400"}`}
-                  style={{ width: `${Math.round(readiness.score * 100)}%` }}
-                />
-              </div>
-              <span className={`shrink-0 text-xs font-bold tabular-nums ${readiness.ready ? "text-emerald-300" : "text-orange-300"}`}>
-                {readiness.ready ? "Ready" : `${Math.round(readiness.score * 100)}%`}
-              </span>
-            </div>
-            {!readiness.ready && readiness.reason && <p className="mt-1.5 px-1 text-xs text-orange-300">{readiness.reason}</p>}
-          </div>
-        )}
-
-        {ready && !allPosesDone && (
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 px-1">
-            <button type="button" aria-pressed={auto} onClick={() => setAuto((a) => !a)} className={`btn min-h-12 px-5 ${auto ? "border border-brand-500/40 bg-brand-500/10 text-brand-300" : "btn-ghost"}`} disabled={!!blocking}>
-              <Icon name={auto ? "bolt" : "pause"} className="h-4 w-4" />
-              {auto ? "Auto-capture on" : "Auto-capture paused"}
-            </button>
-            {!auto && (
-              <button type="button" onClick={capture} className="btn-primary min-h-12 px-6" disabled={busy || !!blocking || !readiness?.ready || !consentOk}>
-                {busy ? <Spinner /> : <Icon name="camera" className="h-4 w-4" />} {readiness?.ready ? "Capture pose" : "Not ready yet"}
-              </button>
-            )}
-          </div>
-        )}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <button onClick={() => setSoundOn((s) => !s)} className={hudBtn} aria-pressed={soundOn} title={soundOn ? "Sounds and spoken prompts on" : "Sounds and spoken prompts off"} aria-label={soundOn ? "Turn sound off" : "Turn sound on"}>
+            <Icon name={soundOn ? "volume" : "volume_off"} className={`h-5 w-5 ${soundOn ? "text-brand-400" : "text-neutral-400"}`} />
+            <span className="hidden lg:inline">{soundOn ? "Sound on" : "Sound off"}</span>
+          </button>
+          <button onClick={toggleFullscreen} className={hudBtn} title="Toggle fullscreen" aria-label="Toggle fullscreen">
+            <Icon name="expand" className="h-5 w-5" />
+            <span className="hidden lg:inline">{fullscreen ? "Exit fullscreen" : "Fullscreen"}</span>
+          </button>
+          <button onClick={onBack} className={hudBtn} title="Leave without finishing (captured samples are kept)" aria-label="Back">
+            <Icon name="arrow_left" className="h-5 w-5" />
+            <span className="hidden md:inline">Back</span>
+          </button>
+        </div>
       </div>
 
-      <aside className="flex flex-col gap-4">
-        <div className="card p-5">
-          <div className="flex items-center gap-3">
-            <Avatar userId={employee.id} name={employee.full_name} hasPhoto={!!status?.has_photo} size="h-14 w-14" text="text-base" version={count} ring />
-            <div className="min-w-0">
-              <p className="truncate font-bold text-white">{employee.full_name}</p>
-              <p className="truncate text-xs text-neutral-500">{[employee.employee_code, employee.department].filter(Boolean).join(" · ")}</p>
-              <div className="mt-1">
-                <RoleBadge role={employee.role} />
+      {/* The instruction (or the latest result) sits above the face window so it never covers the face. */}
+      {showBanner && (
+        <div className="pointer-events-none absolute inset-x-0 top-24 flex justify-center px-4 sm:top-28 [@media(max-height:520px)]:top-3 [@media(max-height:520px)]:px-[19rem]">
+          {notice ? (
+            <div
+              key={`${notice.tone}-${notice.title}-${notice.text}`}
+              role={notice.tone === "success" ? "status" : "alert"}
+              className={`${glass} flex w-full max-w-xl items-center gap-4 rounded-3xl p-3 animate-fade-up sm:p-4 ${noticeStyle[notice.tone].box}`}
+            >
+              <span className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl sm:h-16 sm:w-16 ${noticeStyle[notice.tone].badge}`}>
+                <Icon name={noticeStyle[notice.tone].icon} className="h-8 w-8" strokeWidth={2.6} />
+              </span>
+              <div className="min-w-0">
+                <p className="text-xl font-extrabold leading-tight text-white sm:text-2xl">{notice.title}</p>
+                {notice.text && <p className="text-sm text-neutral-200 sm:text-base">{notice.text}</p>}
               </div>
             </div>
-          </div>
-
-          <div className="mt-5">
-            <div className="mb-1.5 flex justify-between text-xs">
-              <span className="font-semibold text-neutral-300">Samples</span>
-              <span className="tabular-nums text-neutral-400">
-                {count} / {minRequired} required
-              </span>
-            </div>
-            <div className="h-2.5 overflow-hidden rounded-full bg-white/[0.06]">
-              <div className="h-full rounded-full bg-gradient-to-r from-brand-600 to-brand-400 transition-all duration-500" style={{ width: `${pct}%` }} />
-            </div>
-          </div>
-
-          <ul className="mt-5 space-y-1.5">
-            {poses.map((p) => {
-              const done = captured.includes(p);
-              const active = p === currentPose;
-              return (
-                <li
-                  key={p}
-                  className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition-all duration-300 ${
-                    active ? "bg-brand-500/10 text-white ring-1 ring-brand-500/40" : done ? "text-neutral-300" : "text-neutral-500"
-                  }`}
-                >
-                  <span className={`flex h-6 w-6 items-center justify-center rounded-full text-xs ${done ? "bg-emerald-500 text-black" : active ? "bg-brand-500 text-black" : "bg-white/[0.06]"}`}>
-                    {done ? <Icon name="check" className="h-3.5 w-3.5" strokeWidth={3} /> : active && busy ? <Spinner className="h-3.5 w-3.5" /> : POSES[p]?.arrow ?? "•"}
+          ) : (
+            pose && (
+              <div key={currentPose} role="status" className={`${glass} w-full max-w-xl overflow-hidden rounded-3xl animate-fade-up`}>
+                <div className="flex items-center gap-4 p-3 sm:p-4">
+                  <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-brand-500 text-3xl font-black text-black sm:h-16 sm:w-16 sm:text-4xl">
+                    {pose.arrow ?? <Icon name="scan" className="h-8 w-8" strokeWidth={2.2} />}
                   </span>
-                  {POSES[p]?.title ?? p}
-                </li>
-              );
-            })}
-          </ul>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-brand-300">
+                      Pose {poseNumber} of {poses.length}
+                    </p>
+                    <p className="text-2xl font-extrabold leading-tight text-white sm:text-3xl">{pose.title}</p>
+                    <p className="text-sm text-neutral-300 [@media(max-height:520px)]:hidden">{readiness && !readiness.ready && readiness.reason ? readiness.reason : pose.hint}</p>
+                  </div>
+                  {readiness?.ready && (
+                    <span className="ml-auto shrink-0 rounded-full bg-emerald-500 px-3 py-1 text-sm font-bold text-black">Ready</span>
+                  )}
+                </div>
+                <div className="h-1.5 bg-white/10" aria-hidden="true">
+                  <div className={`h-full transition-all duration-200 ${readiness?.ready ? "bg-emerald-400" : "bg-orange-400"}`} style={{ width: `${Math.round((readiness?.score ?? 0) * 100)}%` }} />
+                </div>
+              </div>
+            )
+          )}
         </div>
+      )}
 
-        {status && !status.consent_recorded && (
-          <label className="card flex cursor-pointer items-start gap-3 border-brand-500/30 p-4 text-sm">
-            <input type="checkbox" className="mt-0.5 h-5 w-5 cursor-pointer rounded accent-brand-500" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
-            <span>
-              <span className="flex items-center gap-2 font-semibold text-white">
-                <Icon name="shield" className="h-4 w-4 text-brand-400" /> Biometric consent
+      {cameraError && (
+        <p role="alert" className="absolute inset-x-4 top-48 mx-auto flex max-w-xl items-center gap-2 rounded-xl border border-red-500/40 bg-black/80 px-4 py-3 text-sm text-red-300 backdrop-blur">
+          <Icon name="alert" className="h-4 w-4 shrink-0" /> {cameraError}
+        </p>
+      )}
+
+      {/* Control dock: progress, then the big buttons */}
+      {!allPosesDone && (
+        <div className="absolute inset-x-0 bottom-0 flex justify-center px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-6">
+          <div ref={dockRef} className={`${glass} w-full max-w-3xl space-y-3 rounded-3xl p-3 sm:p-4`}>
+            <div className="flex items-center gap-3">
+              <ol className="flex flex-1 items-center gap-1.5" aria-label="Pose progress">
+                {poses.map((p) => (
+                  <li
+                    key={p}
+                    title={POSES[p]?.title ?? p}
+                    className={`h-2.5 flex-1 rounded-full transition-colors duration-300 ${captured.includes(p) ? "bg-emerald-400" : p === currentPose ? "bg-brand-400 animate-pulse" : "bg-white/15"}`}
+                  />
+                ))}
+              </ol>
+              <span className="shrink-0 text-sm font-semibold tabular-nums text-neutral-100">
+                {count} / {minRequired}
+                <span className="hidden text-neutral-400 sm:inline"> needed</span>
               </span>
-              <span className="text-xs text-neutral-400">
-                {employee.full_name} has agreed to their face being stored for attendance. Capture starts once this is ticked.
-              </span>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className={ghostBtn} onClick={() => setConfirmReset(true)} disabled={count === 0 || resetting} aria-label="Start over" title="Delete the captured samples and begin again">
+                <Icon name="refresh" className="h-5 w-5" />
+                <span className="hidden sm:inline">Start over</span>
+              </button>
+              {ready && (
+                <button
+                  type="button"
+                  aria-pressed={auto}
+                  onClick={() => setAuto((a) => !a)}
+                  disabled={!!blocking}
+                  className={`${dockBtn} flex-1 border ${auto ? "border-brand-500/50 bg-brand-500/15 text-brand-300" : "border-white/15 bg-white/[0.06] text-neutral-100 hover:bg-white/10"}`}
+                >
+                  <Icon name={auto ? "bolt" : "pause"} className="h-5 w-5" />
+                  {auto ? "Auto-capture on" : "Auto-capture paused"}
+                </button>
+              )}
+              {ready && !auto && (
+                <button type="button" onClick={capture} className={`${dockBtn} flex-1 bg-brand-500 text-black shadow-[0_0_40px_-8px_rgba(245,192,0,.8)] hover:bg-brand-400`} disabled={busy || !!blocking || !readiness?.ready || !consentOk}>
+                  {busy ? <Spinner /> : <Icon name="camera" className="h-5 w-5" />} {readiness?.ready ? "Capture pose" : "Not ready yet"}
+                </button>
+              )}
+              {canFinish && (
+                <button type="button" onClick={finish} disabled={finishing} aria-busy={finishing} className={`${dockBtn} flex-1 bg-emerald-500 text-black hover:bg-emerald-400`}>
+                  {finishing ? <Spinner /> : <Icon name="check" className="h-5 w-5" strokeWidth={3} />} Finish
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Things that need an answer take over the screen, like the kiosk's result overlays. */}
+      {blocking && (
+        <KioskPanel tone="error">
+          <span className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-red-500 text-white">
+            <Icon name="shield" className="h-10 w-10" strokeWidth={2.2} />
+          </span>
+          <p role="alert" className="text-2xl font-extrabold text-white sm:text-3xl">Capture blocked for accuracy</p>
+          <p className="mt-2 text-base text-red-200">{blocking}</p>
+          <div className="mt-6 grid gap-2">
+            <button className={`${dockBtn} bg-brand-500 text-black hover:bg-brand-400`} onClick={() => { setBlocking(null); setHint(null); }}>
+              <Icon name="refresh" className="h-5 w-5" /> Dismiss &amp; retry
+            </button>
+            <button className={ghostBtn} onClick={onBack}>
+              Choose a different employee
+            </button>
+          </div>
+        </KioskPanel>
+      )}
+
+      {!blocking && needsConsent && (
+        <KioskPanel tone="info">
+          <span className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-brand-500 text-black">
+            <Icon name="shield" className="h-10 w-10" strokeWidth={2.2} />
+          </span>
+          <p className="text-2xl font-extrabold text-white sm:text-3xl">Biometric consent</p>
+          <p className="mt-2 text-base text-neutral-300">{employee.full_name} has agreed to their face being stored for attendance. Capture starts once you confirm.</p>
+          <div className="mt-6 grid gap-2">
+            <button className={`${dockBtn} bg-brand-500 text-black hover:bg-brand-400`} onClick={() => setConsent(true)}>
+              <Icon name="check" className="h-5 w-5" strokeWidth={3} /> They agree. Start
+            </button>
+            <button className={ghostBtn} onClick={onBack}>
+              Back
+            </button>
+          </div>
+        </KioskPanel>
+      )}
+
+      {!blocking && !needsConsent && outdated > 0 && (
+        <KioskPanel tone="warn">
+          <span className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-orange-500 text-black">
+            <Icon name="alert" className="h-10 w-10" strokeWidth={2.2} />
+          </span>
+          <p className="text-2xl font-extrabold text-white sm:text-3xl">Re-enrollment needed</p>
+          <p className="mt-2 text-base text-neutral-300">{outdated} samples were captured with the previous recognition engine and can't be used. Clear them, then capture again.</p>
+          <div className="mt-6 grid gap-2">
+            <button className={`${dockBtn} bg-brand-500 text-black hover:bg-brand-400`} onClick={reset} disabled={resetting}>
+              {resetting ? <Spinner /> : <Icon name="refresh" className="h-5 w-5" />} Clear old samples
+            </button>
+            <button className={ghostBtn} onClick={onBack}>
+              Back
+            </button>
+          </div>
+        </KioskPanel>
+      )}
+
+      {allPosesDone && !blocking && (
+        <KioskPanel tone="success">
+          <div className="relative mx-auto mb-4 h-24 w-24">
+            <span className="absolute -inset-3 rounded-full bg-emerald-500/25 animate-pulse-ring" />
+            <span className="relative flex h-24 w-24 items-center justify-center rounded-full bg-emerald-500 text-black">
+              <svg viewBox="0 0 24 24" className="h-12 w-12" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 6 9 17l-5-5" strokeDasharray="48" className="animate-draw-check" />
+              </svg>
             </span>
-          </label>
-        )}
-
-        {(status?.outdated_samples ?? 0) > 0 && (
-          <div className="card border-orange-400/30 p-4 text-sm">
-            <p className="font-semibold text-orange-300">Re-enrollment needed</p>
-            <p className="mt-1 text-neutral-400">
-              {status!.outdated_samples} samples were captured with the previous recognition engine and can't be used. Clear them, then capture again.
-            </p>
-            <button className="btn-primary mt-3 w-full py-2" onClick={reset} disabled={resetting}>
-              {resetting && <Spinner />} Clear old samples
+          </div>
+          <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-400">All poses captured</p>
+          <p className="mt-1 text-2xl font-extrabold text-white sm:text-3xl">{employee.full_name}</p>
+          <p className="mt-1 text-sm text-neutral-400">{count} face samples saved. The camera is turned off.</p>
+          <div className="mt-6 grid gap-2">
+            <button className={`${dockBtn} bg-emerald-500 text-black hover:bg-emerald-400`} onClick={finish} disabled={!canFinish || finishing} aria-busy={finishing}>
+              {finishing ? <Spinner /> : <Icon name="check" className="h-5 w-5" strokeWidth={3} />} Finish enrollment
+            </button>
+            <button className={ghostBtn} onClick={() => setConfirmReset(true)} disabled={count === 0}>
+              <Icon name="refresh" className="h-5 w-5" /> Start over
             </button>
           </div>
-        )}
-
-        <div className="flex flex-col gap-2">
-          <button className="btn-primary w-full py-3" disabled={!canFinish || finishing} onClick={finish} aria-busy={finishing}>
-            {finishing && <Spinner />}
-            {canFinish ? "Finish enrollment" : `Capture ${minRequired - count} more to finish`}
-            {canFinish && !finishing && <Icon name="arrow_right" className="h-4 w-4" />}
-          </button>
-          <div className="flex gap-2">
-            <button className="btn-ghost flex-1 py-2 text-xs" onClick={onBack}>
-              <Icon name="arrow_left" className="h-3.5 w-3.5" /> Back
-            </button>
-            <button className="btn-ghost flex-1 py-2 text-xs" onClick={() => setConfirmReset(true)} disabled={count === 0}>
-              <Icon name="refresh" className="h-3.5 w-3.5" /> Start over
-            </button>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-white/[0.06] p-4 text-xs leading-relaxed text-neutral-500">
-          <p className="mb-1 font-semibold text-neutral-300">For best accuracy</p>
-          Even, front lighting · no hats, sunglasses or masks · only the employee in frame · hold each pose for a moment.
-        </div>
-      </aside>
+        </KioskPanel>
+      )}
 
       <ConfirmDialog
         open={confirmReset}
@@ -836,6 +1003,16 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
         onConfirm={reset}
         onClose={() => !resetting && setConfirmReset(false)}
       />
+    </div>
+  );
+}
+
+/** A centred card over a dimmed, blurred camera: the enrollment version of the kiosk's result overlays. */
+function KioskPanel({ children, tone }: { children: React.ReactNode; tone: "success" | "info" | "warn" | "error" }) {
+  const border = { success: "border-emerald-400/40", info: "border-brand-500/40", warn: "border-orange-400/40", error: "border-red-500/40" }[tone];
+  return (
+    <div className="absolute inset-0 z-10 flex overflow-y-auto bg-black/75 p-4 backdrop-blur-md animate-fade-in">
+      <div className={`m-auto w-full max-w-md rounded-3xl border bg-black/60 p-6 text-center animate-scale-in sm:p-8 ${border}`}>{children}</div>
     </div>
   );
 }

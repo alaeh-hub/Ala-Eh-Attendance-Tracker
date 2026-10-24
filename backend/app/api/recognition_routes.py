@@ -13,7 +13,7 @@ from app.services.attendance_service import (
     event_payload,
     record_attendance,
 )
-from app.services.face_service import face_present, recognize_burst
+from app.services.face_service import debug_allowed, detect_for_debug, face_present, recognize_burst, setting
 from app.vision.zone import parse_zone
 from app.services.snapshot_service import save_snapshot
 from app.utils.blocking import run_blocking
@@ -92,6 +92,25 @@ def presence():
     return jsonify({"present": bool(run_blocking(face_present, frame.read(), zone))})
 
 
+@recognition_bp.post("/debug-detect")
+@require_roles(*KIOSK_ROLES, allow_kiosk=True)
+@rate_limit("debug-detect", limit=900, per=60, key=user_ip_key)
+def debug_detect():
+    """
+    Development only: what the detector sees in one frame (every face with its box and landmarks, and
+    which one a scan would use), so the kiosk's debug overlay can track a face live without a scan
+    running. Nothing is identified, stored or logged. A server in production mode answers 404, as if
+    the endpoint did not exist.
+    """
+    if not debug_allowed():
+        raise AppError("Not found.", 404)
+    frame = request.files.get("frame")
+    if frame is None:
+        raise AppError("A 'frame' image is required.", 400)
+    zone = parse_zone(request.form.get("zone"))
+    return jsonify({"debug": run_blocking(detect_for_debug, frame.read(), zone)})
+
+
 @recognition_bp.post("/check-in")
 @require_roles(*KIOSK_ROLES, allow_kiosk=True)
 @rate_limit("check-in", limit=60, per=60, key=user_ip_key)
@@ -132,11 +151,25 @@ def check_in():
 
     # Where the kiosk's guide oval sits in the frame. Absent or implausible = no restriction.
     zone = parse_zone(request.form.get("zone"))
-    result = run_blocking(recognize_burst, [f.read() for f in files], zone)
+    # Development only: with debug=1 every answer also says what the detector saw and how the match scored.
+    # A production server ignores the flag.
+    debug = {} if request.form.get("debug") == "1" and debug_allowed() else None
+    result = run_blocking(recognize_burst, [f.read() for f in files], zone, debug)
     meta = {
         "elapsed_ms": result.get("elapsed_ms"),
         "frames_with_face": result.get("frames_with_face", 0),
     }
+    if debug is not None:
+        number = lambda v: None if v is None else round(float(v), 4)  # noqa: E731 - numpy floats are not JSON-serialisable
+        debug.update(
+            status=result["status"],
+            engine=result.get("engine"),
+            threshold=number(setting("FACE_MATCH_THRESHOLD")),
+            score=number(result.get("score")),
+            runner_up=number(result.get("runner_up_score")),
+            vote_ratio=number(result.get("vote_ratio")),
+        )
+        meta["debug"] = debug
 
     if result["status"] == "NO_FACE":
         logger.info("check-in device=%s status=NO_FACE reason=%r elapsed_ms=%s", device_id, result["reason"], result.get("elapsed_ms"))

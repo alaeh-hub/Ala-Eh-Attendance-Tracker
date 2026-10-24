@@ -3,6 +3,10 @@ from datetime import timedelta
 
 try:
     from dotenv import load_dotenv
+    # .env.local is for running on a dev machine (SQLite, APP_ENV=development). It is loaded first
+    # because load_dotenv never overrides a variable that is already set, so it wins over .env,
+    # which is the production/Docker config. It is gitignored and excluded from the image.
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.local"))
     load_dotenv()
 except ImportError:  # python-dotenv is optional
     pass

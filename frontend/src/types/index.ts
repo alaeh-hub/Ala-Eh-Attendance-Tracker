@@ -1,3 +1,5 @@
+import type { FaceDebug } from "../utils/faceDebug";
+
 /** KIOSK is a device account: it signs in on a kiosk tablet and is always kiosk-locked. */
 export type Role = "ADMIN" | "STAFF" | "OPERATOR" | "KIOSK";
 
@@ -117,6 +119,8 @@ export interface CheckInResult {
   seconds_remaining?: number | null;
   elapsed_ms?: number;
   frames_with_face?: number;
+  /** Development servers only, when asked for: what the face detector saw (see utils/faceDebug). */
+  debug?: FaceDebug;
 }
 
 export interface TodayReport {

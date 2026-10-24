@@ -1,0 +1,4 @@
+# Only needed to (re)generate the spoken prompts: python scripts/generate_voice_local.py
+# Not part of the app or its Docker image.
+kokoro-onnx>=0.6,<1
+lameenc>=1.8,<2

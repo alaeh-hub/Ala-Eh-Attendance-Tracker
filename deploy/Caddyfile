@@ -17,6 +17,9 @@
 	# Caddy runs in a container: don't try to add its local CA to the
 	# container's trust store (pointless, and it logs a warning).
 	skip_install_trust
+	# Clients opening a bare IP send no SNI, and behind Docker's NAT Caddy
+	# would match on the container's internal address instead; pin it.
+	default_sni {$SITE_ADDRESS:localhost}
 	servers {
 		timeouts {
 			read_header 15s

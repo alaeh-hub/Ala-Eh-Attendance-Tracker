@@ -1,4 +1,4 @@
-import { ReactNode, RefObject } from "react";
+import { CSSProperties, ReactNode, RefObject } from "react";
 import Icon from "./Icon";
 import { Spinner } from "./ui";
 
@@ -30,6 +30,7 @@ export default function CameraView({
   fill = false,
   toolsClass = "right-3 top-3",
   ovalClass = "top-[45%] h-[74%]",
+  ovalStyle,
   ovalRef,
 }: {
   videoRef: RefObject<HTMLVideoElement>;
@@ -55,6 +56,8 @@ export default function CameraView({
   toolsClass?: string;
   /** Position and height of the face window (a Tailwind class string; supports responsive variants). */
   ovalClass?: string;
+  /** A measured `top` (the oval's centre) and `height` in px, which win over those in `ovalClass`; see useOvalFit. */
+  ovalStyle?: CSSProperties;
   /** Lets the kiosk measure where the face window is, to tell the server which part of the frame to scan. */
   ovalRef?: RefObject<HTMLDivElement>;
 }) {
@@ -96,14 +99,14 @@ export default function CameraView({
           {!fill && (
             <div
               className={`absolute left-1/2 ${ovalClass} w-auto -translate-x-1/2 -translate-y-1/2 rounded-[50%] shadow-[0_0_0_9999px_rgba(0,0,0,.5)]`}
-              style={{ aspectRatio: "0.78" }}
+              style={{ aspectRatio: "0.78", ...ovalStyle }}
             />
           )}
           <div
             ref={ovalRef}
             className={`absolute left-1/2 ${ovalClass} w-auto -translate-x-1/2 -translate-y-1/2 rounded-[50%] border-[3px] transition-colors duration-300 ${TONE_RING[tone]} ${scanning ? "shadow-[0_0_60px_-6px_rgba(245,192,0,.6)]" : ""
               }`}
-            style={{ aspectRatio: "0.78" }}
+            style={{ aspectRatio: "0.78", ...ovalStyle }}
           >
             {scanning && (
               <div className="absolute inset-0 overflow-hidden rounded-[50%]">

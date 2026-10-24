@@ -10,3 +10,4 @@ coverage
 *.log
 Dockerfile
 .dockerignore
+.voice-venv

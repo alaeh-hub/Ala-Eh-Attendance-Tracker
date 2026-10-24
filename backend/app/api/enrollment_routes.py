@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from app.services.face_service import assess_capture_readiness, enroll_sample, get_enrollment_status, reset_all_enrollments, reset_enrollment
+from app.services.face_service import assess_capture_readiness, debug_allowed, enroll_sample, get_enrollment_status, reset_all_enrollments, reset_enrollment
 from app.middleware.error_handler import AppError
 from app.extensions import db
 from app.utils.audit import log_action
@@ -87,8 +87,13 @@ def check_readiness():
     base = pose.split("_")[0]
     reference = _opt_float("reference_yaw") if base == "right" else _opt_float("reference_pitch") if base == "down" else None
 
+    # Development only: with debug=1 the answer also says what the detector saw (boxes, landmarks, numbers).
+    # A production server ignores the flag.
+    debug = {} if request.form.get("debug") == "1" and debug_allowed() else None
     result = assess_capture_readiness(request.files["image"].read(), pose, baseline=baseline, reference=reference,
-                                      zone=parse_zone(request.form.get("zone")))
+                                      zone=parse_zone(request.form.get("zone")), debug=debug)
+    if debug is not None:
+        result["debug"] = debug
     return jsonify(result)
 
 
