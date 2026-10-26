@@ -39,13 +39,23 @@ describe("FaceDebugOverlay", () => {
     expect(svg).toHaveAttribute("preserveAspectRatio", "xMidYMid slice"); // crops the frame the way the video's object-cover does
     expect(svg).toHaveClass("-scale-x-100"); // mirrored like the video
     expect(svg.querySelectorAll("rect")).toHaveLength(2);
-    expect(svg.querySelectorAll("circle")).toHaveLength(5);
+    expect(svg.querySelectorAll("[data-landmark]")).toHaveLength(5);
     const ovals = svg.querySelectorAll("ellipse");
     expect(ovals).toHaveLength(2);
     // the drawn oval, then the wider area the server accepts
     expect(ovals[0]).toHaveAttribute("rx", String(0.2 * 1280));
     expect(ovals[0]).toHaveAttribute("ry", String(0.4 * 720));
     expect(ovals[1]).toHaveAttribute("rx", String(0.2 * 1.3 * 1280));
+  });
+
+  it("draws the jawline and a chin dot when the server fitted them", () => {
+    const jaw: [number, number][] = Array.from({ length: 17 }, (_, i) => [520 + i * 10, 380 + Math.abs(8 - i) * -5] as [number, number]);
+    const withJaw: FaceDebug = { ...data, faces: [{ ...data.faces[0], jaw, chin: [600, 460], forehead: [600, 150] }, data.faces[1]] };
+    render(<FaceDebugOverlay debug={state({ data: withJaw })} kind="enroll" />);
+    expect(shapes()!.querySelectorAll("polyline")).toHaveLength(2) // the jawline and its shadow;
+    expect(screen.getByTestId("face-debug-chin").style.transform).toBe("translate(600px, 460px)");
+    expect(screen.getByTestId("face-debug-forehead").style.transform).toBe("translate(600px, 150px)");
+    expect(screen.getByText("chin / jaw")).toBeInTheDocument();
   });
 
   it("marks the face that was used differently from the ones that were ignored", () => {
@@ -107,7 +117,7 @@ describe("FaceDebugOverlay", () => {
     const [box] = Array.from(shapes()!.querySelectorAll("rect"));
     expect(box.style.transform).toBe("translate(500px, 200px)");
     expect(box.style.transition).toContain("transform");
-    const [firstLandmark] = Array.from(shapes()!.querySelectorAll("circle"));
+    const [firstLandmark] = Array.from(shapes()!.querySelectorAll<SVGGElement>("[data-landmark]"));
     expect(firstLandmark.style.transform).toBe("translate(550px, 300px)");
     expect(firstLandmark.style.transition).toContain("transform");
   });
@@ -147,6 +157,6 @@ describe("FaceDebugOverlay", () => {
   it("draws a detector without landmarks (the dlib engine) as a box only", () => {
     render(<FaceDebugOverlay debug={state({ data: { ...data, faces: [{ box: [500, 200, 700, 480], score: 0.9, chosen: true }] } })} kind="scan" />);
     expect(shapes()!.querySelectorAll("rect")).toHaveLength(1);
-    expect(shapes()!.querySelectorAll("circle")).toHaveLength(0);
+    expect(shapes()!.querySelectorAll("[data-landmark]")).toHaveLength(0);
   });
 });

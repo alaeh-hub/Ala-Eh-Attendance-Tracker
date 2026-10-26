@@ -30,11 +30,15 @@ services:
     image: caddy:2.10.2-alpine
     <<: *hardening
     restart: unless-stopped
+    # restart: true brings caddy back whenever frontend/backend are recreated (docker compose stops it
+    # first, and a restart policy does not revive a container that compose itself stopped).
     depends_on:
       frontend:
         condition: service_started
+        restart: true
       backend:
-        condition: service_started
+        condition: service_healthy
+        restart: true
     environment:
       SITE_ADDRESS: ${SITE_ADDRESS:-localhost}
       TLS_MODE: ${TLS_MODE:-internal}

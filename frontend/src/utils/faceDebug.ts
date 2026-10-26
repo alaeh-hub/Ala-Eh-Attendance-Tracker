@@ -15,6 +15,11 @@ export interface DebugFace {
   chosen: boolean;
   /** YuNet's five points: right eye, left eye, nose, right mouth corner, left mouth corner. */
   landmarks?: [number, number][];
+  /** dlib's jawline, ear to ear (17 points), and the chin on it. Only for the chosen face, when the server could fit them. */
+  jaw?: [number, number][];
+  chin?: [number, number];
+  /** Estimated (no model sees it) from the brows and chin by the facial thirds; for display only. */
+  forehead?: [number, number];
 }
 
 export interface FaceDebug {
@@ -42,6 +47,8 @@ export interface FaceDebug {
 
 export const LANDMARK_NAMES = ["right eye", "left eye", "nose", "mouth R", "mouth L"] as const;
 export const LANDMARK_COLORS = ["#f87171", "#60a5fa", "#facc15", "#4ade80", "#c084fc"] as const;
+
+export const CHIN_COLOR = "#f472b6";
 
 const STORAGE_KEY = "face_debug_on";
 

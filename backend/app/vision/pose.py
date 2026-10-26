@@ -55,16 +55,49 @@ def _face_angles(landmarks: np.ndarray):
     return yaw, pitch
 
 
+# With the chin known, pitch is the nose's place on the eye-to-chin line (0 = at the eyes,
+# 1 = at the chin). That is a fraction of the face's own height, so it does not depend on how
+# far the person stands, and the chin anchors the lower half of the face, which the five
+# YuNet points cannot see. The eye-to-chin span is ~1.9x the interocular distance, so the
+# thresholds above (in interocular units) are divided by that to keep the same feel.
+CHIN_SPAN_RATIO = 1.9
+
+
+def _chin_pitch(jaw: dict) -> float | None:
+    span = float(jaw["chin"][1] - jaw["eye_mid"][1])
+    if span < 1e-3:
+        return None
+    return float((jaw["nose_tip"][1] - jaw["eye_mid"][1]) / span)
+
+
 def assess_pose(face, pose_label: str, baseline: tuple[float, float] | None = None,
-                reference: float | None = None) -> dict:
-    """Returns {"ok", "progress" (0-1), "reason", "yaw", "pitch"}."""
+                reference: float | None = None, image: np.ndarray | None = None) -> dict:
+    """
+    Returns {"ok", "progress" (0-1), "reason", "yaw", "pitch", "jaw"}.
+
+    With `image`, pitch is measured from the chin (see _chin_pitch) instead of the five
+    landmarks alone, and `jaw` carries the chin/jawline points for the debug overlay. Callers
+    must use one source throughout a sequence (baseline/reference are in the same units), so
+    when the chin cannot be found this reports "not ok" rather than silently switching.
+    """
     if face.landmarks is None:
-        return {"ok": True, "progress": 1.0, "reason": None, "yaw": None, "pitch": None}
+        return {"ok": True, "progress": 1.0, "reason": None, "yaw": None, "pitch": None, "jaw": None}
 
     angles = _face_angles(face.landmarks)
     if angles is None:
-        return {"ok": True, "progress": 1.0, "reason": None, "yaw": None, "pitch": None}
+        return {"ok": True, "progress": 1.0, "reason": None, "yaw": None, "pitch": None, "jaw": None}
     yaw, pitch = angles
+    jaw = None
+    scale = 1.0
+    if image is not None:
+        from app.vision.liveness import jaw_landmarks
+
+        jaw = jaw_landmarks(image, face.landmark_rect())
+        chin_pitch = _chin_pitch(jaw) if jaw is not None else None
+        if chin_pitch is None:
+            return {"ok": False, "progress": 0.0, "reason": "Keep your whole face, including your chin, in view",
+                    "yaw": None, "pitch": None, "jaw": None}
+        pitch, scale = chin_pitch, 1.0 / CHIN_SPAN_RATIO
     base = (pose_label or "frontal").split("_")[0]
 
     # The nose is naturally well below the eye midpoint, so `pitch` is a
@@ -75,7 +108,7 @@ def assess_pose(face, pose_label: str, baseline: tuple[float, float] | None = No
     # frontend had a chance to record the baseline.
     if base == "frontal" and baseline is None:
         return {"ok": True, "progress": 1.0, "reason": None,
-                "yaw": round(yaw, 4), "pitch": round(pitch, 4)}
+                "yaw": round(yaw, 4), "pitch": round(pitch, 4), "jaw": jaw}
 
     yaw0, pitch0 = baseline if baseline is not None else (0.0, 0.0)
     dyaw, dpitch = yaw - yaw0, pitch - pitch0
@@ -87,7 +120,8 @@ def assess_pose(face, pose_label: str, baseline: tuple[float, float] | None = No
         progress = min(1.0, abs(dyaw) / YAW_TURN_MIN)
         reason = None if ok else "Turn your head further to the side"
     elif base in ("up", "down"):
-        tilt_min = PITCH_DOWN_MIN if base == "down" else PITCH_TILT_MIN
+        tilt_min = (PITCH_DOWN_MIN if base == "down" else PITCH_TILT_MIN) * scale
+        tilt_max = PITCH_TILT_MAX * scale
         # Signed movement toward this pose's side of baseline. For "down" the
         # side is opposite to the employee's own "up" deviation. Progress
         # grows smoothly with that movement, so slight wobble in the wrong
@@ -96,21 +130,23 @@ def assess_pose(face, pose_label: str, baseline: tuple[float, float] | None = No
             toward = -dpitch * (1.0 if reference > 0 else -1.0)
         else:
             toward = abs(dpitch)
-        in_range = tilt_min <= toward <= PITCH_TILT_MAX
+        in_range = tilt_min <= toward <= tilt_max
         ok = in_range
         if toward < tilt_min:
             progress = max(0.0, toward / tilt_min)
             reason = "Tilt your chin further down" if base == "down" else "Tilt your chin further up"
-        elif toward > PITCH_TILT_MAX:
-            progress = min(1.0, PITCH_TILT_MAX / toward)
+        elif toward > tilt_max:
+            progress = min(1.0, tilt_max / toward)
             reason = "Tilt your chin back slightly"
         else:
             progress = 1.0
             reason = None
     else:
-        ok = abs(dyaw) <= YAW_FRONTAL_MAX and abs(dpitch) <= PITCH_FRONTAL_MAX
-        worst_off = max(abs(dyaw) / YAW_FRONTAL_MAX, abs(dpitch) / PITCH_FRONTAL_MAX, 1e-6)
+        pitch_max = PITCH_FRONTAL_MAX * scale
+        ok = abs(dyaw) <= YAW_FRONTAL_MAX and abs(dpitch) <= pitch_max
+        worst_off = max(abs(dyaw) / YAW_FRONTAL_MAX, abs(dpitch) / pitch_max, 1e-6)
         progress = 1.0 / worst_off if worst_off > 1.0 else 1.0
         reason = None if ok else "Look straight at the camera"
 
-    return {"ok": ok, "progress": max(0.0, min(1.0, progress)), "reason": reason, "yaw": round(yaw, 4), "pitch": round(pitch, 4)}
+    return {"ok": ok, "progress": max(0.0, min(1.0, progress)), "reason": reason,
+            "yaw": round(yaw, 4), "pitch": round(pitch, 4), "jaw": jaw}

@@ -188,6 +188,22 @@ def _face_debug(face, chosen) -> dict:
     return data
 
 
+def _jaw_debug(jaw) -> dict | None:
+    """The jawline (ear to ear) and chin from vision.liveness.jaw_landmarks, as plain JSON numbers."""
+    if jaw is None:
+        return None
+    pts = lambda a: [[round(float(x), 1), round(float(y), 1)] for x, y in a]  # noqa: E731
+    return {"jaw": pts(jaw["jaw"]), "chin": pts([jaw["chin"]])[0], "forehead": pts([jaw["forehead"]])[0]}
+
+
+def _add_jaw(data: dict, jaw) -> None:
+    """Attach the jaw to the chosen face's entry of a debug payload (the only face it is measured for)."""
+    extra = _jaw_debug(jaw)
+    for entry in data.get("faces", []):
+        if entry.get("chosen") and extra:
+            entry.update(extra)
+
+
 def _detections_debug(image, faces, chosen, zone, **extra) -> dict:
     """What the detector saw in one frame, in that frame's own pixel coordinates."""
     img_h, img_w = image.shape[:2]
@@ -220,7 +236,12 @@ def detect_for_debug(image_bytes: bytes, zone=None) -> dict:
         chosen, reason = pick_single_face(candidates, allow_dominant=True)
         if chosen is not None and zone and too_small(zone, chosen.box, img_h):
             chosen, reason = None, MOVE_CLOSER
-    return _detections_debug(image, faces, chosen, zone, live=True, engine=engine.name, reason=reason, ms=_ms(started))
+    data = _detections_debug(image, faces, chosen, zone, live=True, engine=engine.name, reason=reason, ms=_ms(started))
+    if chosen is not None and chosen.landmarks is not None:
+        from app.vision.liveness import jaw_landmarks
+
+        _add_jaw(data, jaw_landmarks(image, chosen.landmark_rect()))
+    return data
 
 
 def _enrollment_face(engine, image, zone, debug: dict | None = None):
@@ -363,13 +384,14 @@ def assess_capture_readiness(image_bytes: bytes, pose_label: str | None,
 
     # Same floor as enroll_sample, or the preview would say "ready" and the capture would refuse.
     quality = assess_quality(image, face.box, min_blur=cfg.get("ENROLL_BLUR_THRESHOLD"))
-    pose = assess_pose(face, pose_label or "frontal", baseline=baseline, reference=reference)
+    pose = assess_pose(face, pose_label or "frontal", baseline=baseline, reference=reference, image=image)
     score = round((0.5 * quality["score"] + 0.5 * pose["progress"]) if quality["ok"] else 0.0, 3)
     angles = {"yaw": pose["yaw"], "pitch": pose["pitch"]}
     if debug is not None:
         debug["quality"] = {"ok": bool(quality["ok"]), "score": round(float(quality["score"]), 3), "reason": quality["reason"]}
         debug["pose"] = {"ok": bool(pose["ok"]), "progress": round(float(pose["progress"]), 3), "reason": pose["reason"],
                          "yaw": pose["yaw"], "pitch": pose["pitch"], "label": pose_label or "frontal"}
+        _add_jaw(debug, pose.get("jaw"))
 
     if not quality["ok"]:
         return {"ready": False, "score": score, "reason": quality["reason"], **angles}

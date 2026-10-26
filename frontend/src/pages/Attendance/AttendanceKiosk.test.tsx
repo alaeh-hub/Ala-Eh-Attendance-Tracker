@@ -227,7 +227,7 @@ describe("AttendanceKiosk", () => {
       expect(await screen.findByText("frame 640x480")).toBeInTheDocument();
       expect(checkInForms()[0].get("debug")).toBe("1");
       expect(screen.getByText("faces 1")).toBeInTheDocument();
-      expect(screen.getByTestId("face-debug-shapes").querySelectorAll("circle")).toHaveLength(5);
+      expect(screen.getByTestId("face-debug-shapes").querySelectorAll("[data-landmark]")).toHaveLength(5);
     });
 
     it("says when the server sends no debug data (it is in production mode)", async () => {
@@ -252,7 +252,7 @@ describe("AttendanceKiosk", () => {
         renderKiosk();
 
         expect(await screen.findByText("live detection 12 ms")).toBeInTheDocument();
-        expect(screen.getByTestId("face-debug-shapes").querySelectorAll("circle")).toHaveLength(5);
+        expect(screen.getByTestId("face-debug-shapes").querySelectorAll("[data-landmark]")).toHaveLength(5);
         const frames = post.mock.calls.filter(([url]) => url === "/recognition/debug-detect").map(([, form]) => form as FormData);
         expect(frames[0].get("frame")).toBeInstanceOf(Blob);
         // nothing was scanned: only the live preview ran

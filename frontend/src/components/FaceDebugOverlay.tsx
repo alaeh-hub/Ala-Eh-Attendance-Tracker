@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FaceDebugControls, LANDMARK_COLORS, LANDMARK_NAMES, debugLines, detectionLines, matchLines, useFaceDebugReadings } from "../utils/faceDebug";
+import { CHIN_COLOR, FaceDebugControls, LANDMARK_COLORS, LANDMARK_NAMES, debugLines, detectionLines, matchLines, useFaceDebugReadings } from "../utils/faceDebug";
 
 // A reading older than this is drawn faded: the camera has moved on since.
 const STALE_MS = 2500;
@@ -7,9 +7,39 @@ const STALE_MS = 2500;
 // (short, so the glide adds as little lag as possible).
 const GLIDE = "transform 140ms linear";
 
+/* Shape paths, all centred on (0, 0) and sized by `s` in frame pixels. */
+
+/** Four corner brackets instead of a full outline: reads as a lock-on frame. */
+function bracketPath(w: number, h: number): string {
+  const c = Math.min(w, h) * 0.18;
+  return `M0 ${c}V0H${c}M${w - c} 0H${w}V${c}M${w} ${h - c}V${h}H${w - c}M${c} ${h}H0V${h - c}`;
+}
+
+/** A crosshair with a gap in the middle, for the detector's points. */
+function reticlePath(s: number): string {
+  const g = s * 0.4;
+  return `M${-s} 0H${-g}M${g} 0H${s}M0 ${-s}V${-g}M0 ${g}V${s}`;
+}
+
+function diamondPath(s: number): string {
+  return `M0 ${-s}L${s} 0L0 ${s}L${-s} 0Z`;
+}
+
+/** A downward-pointing marker whose tip sits on the chin. */
+function chinPath(s: number): string {
+  return `M0 0L${-s} ${-s * 1.5}H${s}Z`;
+}
+
+/** A shallow dashed arc with end ticks, like a measuring bracket over the forehead. */
+function foreheadPath(s: number): string {
+  return `M${-s} ${s * 0.3}Q0 ${-s * 0.5} ${s} ${s * 0.3}M${-s} ${s * 0.3}V${s * 0.7}M${s} ${s * 0.3}V${s * 0.7}`;
+}
+
+const jawPoints = (jaw: [number, number][]) => jaw.map(([x, y]) => `${x},${y}`).join(" ");
+
 /**
  * Development-only: draws what the server's face detector saw over the camera picture (every face
- * box, the five landmarks, the guide oval and the zone the server accepts) with a readout of the
+ * box, the five landmarks, the chin/jawline, the guide oval and the zone the server accepts) with a readout of the
  * numbers. It is a sibling of the camera and covers the same area, so the SVG's "slice" fit crops
  * the frame exactly the way the video's object-cover does; it is mirrored like the video.
  */
@@ -74,24 +104,60 @@ export default function FaceDebugOverlay({ debug, kind }: { debug: FaceDebugCont
                   height={bottom - top}
                   fill="none"
                   stroke={colour}
-                  strokeWidth={2}
+                  strokeWidth={f.chosen ? 1 : 2}
+                  opacity={f.chosen ? 0.35 : 1}
                   strokeDasharray={f.chosen ? undefined : "8 5"}
                   vectorEffect="non-scaling-stroke"
                   style={{ transform: `translate(${left}px, ${top}px)`, transition: GLIDE }}
                 />
-                {f.landmarks?.map(([x, y], n) => (
-                  <circle
-                    key={n}
-                    cx={0}
-                    cy={0}
-                    r={unit * 0.007}
-                    fill={LANDMARK_COLORS[n] ?? "#fff"}
-                    stroke="#000"
-                    strokeWidth={1}
+                {f.chosen && (
+                  <path
+                    data-testid="face-debug-brackets"
+                    d={bracketPath(right - left, bottom - top)}
+                    fill="none"
+                    stroke={colour}
+                    strokeWidth={3}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
                     vectorEffect="non-scaling-stroke"
-                    style={{ transform: `translate(${x}px, ${y}px)`, transition: GLIDE }}
+                    style={{ transform: `translate(${left}px, ${top}px)`, transition: GLIDE }}
                   />
+                )}
+                {f.forehead && f.chin && (
+                  <line
+                    x1={f.forehead[0]}
+                    y1={f.forehead[1]}
+                    x2={f.chin[0]}
+                    y2={f.chin[1]}
+                    stroke={CHIN_COLOR}
+                    strokeWidth={1}
+                    strokeDasharray="2 6"
+                    opacity={0.6}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                )}
+                {f.jaw && (
+                  <>
+                    <polyline points={jawPoints(f.jaw)} fill="none" stroke="#000" strokeWidth={4} strokeLinejoin="round" strokeLinecap="round" opacity={0.35} vectorEffect="non-scaling-stroke" />
+                    <polyline points={jawPoints(f.jaw)} fill="none" stroke={CHIN_COLOR} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+                  </>
+                )}
+                {f.landmarks?.map(([x, y], n) => (
+                  <g key={n} data-landmark="" stroke={LANDMARK_COLORS[n] ?? "#fff"} fill="none" strokeWidth={2} strokeLinecap="round" style={{ transform: `translate(${x}px, ${y}px)`, transition: GLIDE }}>
+                    <path d={reticlePath(unit * 0.011)} vectorEffect="non-scaling-stroke" />
+                    <path d={diamondPath(unit * 0.0035)} fill={LANDMARK_COLORS[n] ?? "#fff"} stroke="#000" strokeWidth={0.75} vectorEffect="non-scaling-stroke" />
+                  </g>
                 ))}
+                {f.chin && (
+                  <g data-testid="face-debug-chin" stroke="#000" strokeWidth={0.75} style={{ transform: `translate(${f.chin[0]}px, ${f.chin[1]}px)`, transition: GLIDE }}>
+                    <path d={chinPath(unit * 0.011)} fill={CHIN_COLOR} vectorEffect="non-scaling-stroke" />
+                  </g>
+                )}
+                {f.forehead && (
+                  <g data-testid="face-debug-forehead" stroke={CHIN_COLOR} fill="none" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ transform: `translate(${f.forehead[0]}px, ${f.forehead[1]}px)`, transition: GLIDE }}>
+                    <path d={foreheadPath(unit * 0.02)} strokeDasharray="3 4" vectorEffect="non-scaling-stroke" />
+                  </g>
+                )}
               </g>
             );
           })}
@@ -131,13 +197,21 @@ export default function FaceDebugOverlay({ debug, kind }: { debug: FaceDebugCont
                 <p className="mt-1 flex flex-wrap gap-x-2 [@media(max-height:520px)]:hidden">
                   {LANDMARK_NAMES.map((name, n) => (
                     <span key={name} className="inline-flex items-center gap-1">
-                      <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: LANDMARK_COLORS[n] }} />
+                      <span className="inline-block h-1.5 w-1.5 rotate-45" style={{ background: LANDMARK_COLORS[n] }} />
                       {name}
                     </span>
                   ))}
+                  <span className="inline-flex items-center gap-1">
+                    <span style={{ color: CHIN_COLOR }}>▼</span>
+                    chin / jaw
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span style={{ color: CHIN_COLOR }}>⌒</span>
+                    forehead (est.)
+                  </span>
                 </p>
                 <p className="mt-1 text-neutral-400 [@media(max-height:520px)]:hidden">
-                  <span className="text-green-400">━</span> used <span className="text-orange-400">┅</span> ignored <span className="text-cyan-300">◯</span> oval / zone
+                  <span className="text-green-400">┏┛</span> used <span className="text-orange-400">┅</span> ignored <span className="text-cyan-300">◯</span> oval / zone
                 </p>
               </>
             ) : missing ? (

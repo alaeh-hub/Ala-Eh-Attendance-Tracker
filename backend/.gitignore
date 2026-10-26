@@ -4,4 +4,8 @@ __pycache__/
 venv/
 logs/
 instance/
+
+# Local environment secrets
 .env
+.env.*
+!.env.example

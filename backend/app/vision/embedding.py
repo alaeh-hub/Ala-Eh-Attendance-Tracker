@@ -58,10 +58,15 @@ class DlibEmbeddingProvider(FaceEmbeddingProvider):
         return normalize(np.array(descriptor))
 
     @staticmethod
+    def face_landmarks(image: np.ndarray, rect: dlib.rectangle) -> np.ndarray:
+        """All 68 points as a 68x2 array (RGB or grayscale image)."""
+        shape = pose_predictor_68_point(image, rect)
+        return np.array([[p.x, p.y] for p in shape.parts()], dtype=np.float32)
+
+    @staticmethod
     def eye_landmarks(image: np.ndarray, rect: dlib.rectangle):
         """(left_eye, right_eye) as 6x2 arrays from the 68-point model (RGB or grayscale image)."""
-        shape = pose_predictor_68_point(image, rect)
-        pts = np.array([[p.x, p.y] for p in shape.parts()], dtype=np.float32)
+        pts = DlibEmbeddingProvider.face_landmarks(image, rect)
         return pts[36:42], pts[42:48]
 
 

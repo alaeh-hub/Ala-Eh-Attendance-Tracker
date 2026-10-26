@@ -29,23 +29,22 @@ export default function IdleScreen({ hint = "Move, tap, or press a key to contin
       role="status"
       aria-label={`Idle. ${hint}.`}
     >
-      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[640px] w-[640px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-500/10 blur-[120px]" />
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(255,255,255,.025)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.025)_1px,transparent_1px)] bg-[size:48px_48px] [mask-image:radial-gradient(ellipse_at_center,black_30%,transparent_75%)]" />
+      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[1000px] w-[1000px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-500/10 blur-[120px]" />
 
       <div className="relative flex flex-col items-center text-center animate-scale-in">
-        <div className="relative mb-6">
+        <div className="relative mb-10">
           <span className="absolute inset-0 rounded-full bg-brand-500/30 blur-2xl" />
-          <img src="/logo.png" alt="Ala Eh! Food Products" className="relative h-24 w-24 rounded-full shadow-glow" />
+          <img src="/logo.png" alt="Ala Eh! Food Products" className="relative h-40 w-40 rounded-full shadow-glow sm:h-56 sm:w-56" />
         </div>
-        <p className="text-lg font-semibold text-brand-400">
+        <p className="text-3xl font-semibold text-brand-400 sm:text-5xl">
           {greet(orgParts(now).hour)}
           <span className="text-brand-300">.</span>
         </p>
-        <p className="mt-2 text-6xl font-extrabold tabular-nums tracking-tight text-white sm:text-7xl">
+        <p className="mt-4 text-[clamp(5.5rem,17vw,15rem)] font-extrabold leading-none tabular-nums tracking-tight text-white">
           {formatTime(now.toISOString())}
         </p>
-        <p className="mt-2 text-base text-neutral-400">{formatDate(now, { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</p>
-        <p className="mt-10 text-xs font-semibold uppercase tracking-[0.2em] text-neutral-500">{hint}</p>
+        <p className="mt-5 text-2xl text-neutral-300 sm:text-4xl">{formatDate(now, { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</p>
+        <p className="mt-16 text-base font-semibold uppercase tracking-[0.2em] text-neutral-400 sm:text-2xl">{hint}</p>
       </div>
     </div>
   );

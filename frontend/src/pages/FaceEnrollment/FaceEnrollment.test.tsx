@@ -250,7 +250,7 @@ describe("Face enrollment capture", () => {
       expect(checkForms()[0].get("debug")).toBe("1");
       expect(screen.getByText("quality 0.91 ok")).toBeInTheDocument();
       expect(screen.getByText(/yaw -0\.08\s+pitch 0\.02/)).toBeInTheDocument(); // the readout has two spaces; the page text is whitespace-collapsed
-      expect(screen.getByTestId("face-debug-shapes").querySelectorAll("circle")).toHaveLength(5);
+      expect(screen.getByTestId("face-debug-shapes").querySelectorAll("[data-landmark]")).toHaveLength(5);
     });
 
     it("says when the server sends no debug data (it is in production mode)", async () => {

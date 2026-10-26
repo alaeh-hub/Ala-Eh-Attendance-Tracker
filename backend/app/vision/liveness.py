@@ -78,6 +78,13 @@ class Dlib68EyeLandmarks:
         with self._lock:
             return embedding_provider.eye_landmarks(image, rect)
 
+    def face_landmarks(self, image, rect):
+        """68x2 array: the same predictor (and lock) as the eyes, for the jaw/chin used by pose checks."""
+        from app.vision.embedding import embedding_provider
+
+        with self._lock:
+            return embedding_provider.face_landmarks(image, rect)
+
 
 _sources: dict[str, EyeLandmarkSource] = {}
 _sources_lock = threading.Lock()
@@ -119,24 +126,56 @@ def frame_ear(image: np.ndarray, rect: dlib.rectangle,
     one-pixel landmark error there is a 5-10% EAR error.
     """
     try:
-        h, w = image.shape[:2]
-        size = max(rect.width(), 1)
-        pad = int(size * 0.25)
-        x0, y0 = max(rect.left() - pad, 0), max(rect.top() - pad, 0)
-        x1, y1 = min(rect.right() + pad, w), min(rect.bottom() + pad, h)
-        crop = image[y0:y1, x0:x1]
-        scale = LANDMARK_FACE_PX / float(size)
-        if crop.size == 0:
+        crop, local, _, _, _ = _landmark_crop(image, rect)
+        if crop is None:
             return None
-        crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC if scale > 1 else cv2.INTER_AREA)
-        local = dlib.rectangle(
-            int((rect.left() - x0) * scale), int((rect.top() - y0) * scale),
-            int((rect.right() - x0) * scale), int((rect.bottom() - y0) * scale),
-        )
         left, right = (source or get_eye_landmark_source()).eye_landmarks(crop, local)
     except Exception:  # noqa: BLE001 - a landmark failure just means "no EAR for this frame"
         return None
     return eye_aspect_ratio(left), eye_aspect_ratio(right)
+
+
+def _landmark_crop(image: np.ndarray, rect: dlib.rectangle):
+    """(crop, local_rect, x0, y0, scale): the face cut out and scaled to ~LANDMARK_FACE_PX wide,
+    with `rect` re-expressed in the crop. x0/y0/scale map crop points back to the full image."""
+    h, w = image.shape[:2]
+    size = max(rect.width(), 1)
+    pad = int(size * 0.25)
+    x0, y0 = max(rect.left() - pad, 0), max(rect.top() - pad, 0)
+    x1, y1 = min(rect.right() + pad, w), min(rect.bottom() + pad, h)
+    crop = image[y0:y1, x0:x1]
+    if crop.size == 0:
+        return None, None, 0, 0, 1.0
+    scale = LANDMARK_FACE_PX / float(size)
+    crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC if scale > 1 else cv2.INTER_AREA)
+    local = dlib.rectangle(
+        int((rect.left() - x0) * scale), int((rect.top() - y0) * scale),
+        int((rect.right() - x0) * scale), int((rect.bottom() - y0) * scale),
+    )
+    return crop, local, x0, y0, scale
+
+
+def jaw_landmarks(image: np.ndarray, rect: dlib.rectangle) -> dict | None:
+    """
+    Chin and jawline in full-image pixels, from the 68-point model on the same upscaled crop the
+    blink check uses: {"jaw": 17x2 (ear to ear), "chin": (x, y), "nose_tip": (x, y), "eye_mid": (x, y)}.
+    The chin is the mean of the three lowest jaw points (7, 8, 9), steadier than point 8 alone.
+    None when the model fails. Chin-up/chin-down enrollment poses are measured against these.
+    """
+    try:
+        crop, local, x0, y0, scale = _landmark_crop(image, rect)
+        if crop is None:
+            return None
+        pts = get_eye_landmark_source("dlib68").face_landmarks(crop, local) / scale + np.array([x0, y0], dtype=np.float32)
+    except Exception:  # noqa: BLE001 - no jaw just means the caller falls back to "can't see the chin"
+        return None
+    eyes = (pts[36:42].mean(axis=0) + pts[42:48].mean(axis=0)) / 2
+    chin = pts[7:10].mean(axis=0)
+    # No model here sees the forehead (the 68 points stop at the brows), so it is ESTIMATED with the
+    # facial thirds: hairline-to-brow is about half the brow-to-chin distance, along the brow-chin line.
+    brow = (pts[19] + pts[24]) / 2
+    forehead = brow + (brow - chin) * 0.5
+    return {"jaw": pts[0:17], "chin": chin, "nose_tip": pts[30], "eye_mid": eyes, "forehead": forehead}
 
 
 def blink_candidate(samples: list, blink_delta_threshold: float) -> int | None:

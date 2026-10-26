@@ -1,6 +1,9 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { afterEach } from "vitest";
+
+// Routes are lazy chunks: under a parallel full run the first findBy/waitFor can need more than the 1s default.
+configure({ asyncUtilTimeout: 5000 });
 
 afterEach(() => {
   cleanup();
