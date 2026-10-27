@@ -30,6 +30,10 @@ logger = logging.getLogger("app.enrollment")
 # a face at kiosk distance remains large enough for the alignment models.
 MAX_FRAME_WIDTH = 1280
 MAX_FRAME_PIXELS = 20_000_000
+# A check-in keeps each usable decoded frame for face tracking and liveness.
+# Bound the sum before decoding so a burst cannot multiply the per-frame cap
+# into hundreds of megapixels of retained image data.
+MAX_BURST_PIXELS = 32_000_000
 THUMBNAIL_SIZE = 192
 
 
@@ -39,8 +43,8 @@ def setting(name: str):
     return value if value is not None else active_engine().DEFAULTS[name]
 
 
-def decode_image(image_bytes: bytes) -> np.ndarray:
-    """Decode a bounded JPEG/PNG frame, rejecting oversized dimensions before allocation."""
+def image_dimensions(image_bytes: bytes) -> tuple[int, int]:
+    """Read JPEG/PNG dimensions from the header without allocating an image."""
     if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
         raise AppError("Image data is empty or invalid.", 400)
 
@@ -78,6 +82,27 @@ def decode_image(image_bytes: bytes) -> np.ndarray:
 
     if not width or not height:
         raise AppError("Could not read image dimensions.", 400)
+    return width, height
+
+
+def validate_burst_pixel_budget(frames: list[bytes]) -> None:
+    """Reject a burst whose decoded source frames exceed the memory budget."""
+    total_pixels = 0
+    for raw in frames:
+        try:
+            width, height = image_dimensions(raw)
+        except AppError:
+            # Keep the existing behavior: malformed frames are ignored by
+            # recognize_burst, while valid frames still get processed.
+            continue
+        total_pixels += width * height
+        if total_pixels > MAX_BURST_PIXELS:
+            raise AppError("The combined image dimensions are too large.", 413)
+
+
+def decode_image(image_bytes: bytes) -> np.ndarray:
+    """Decode a bounded JPEG/PNG frame, rejecting oversized dimensions before allocation."""
+    width, height = image_dimensions(image_bytes)
     if width * height > MAX_FRAME_PIXELS:
         raise AppError("Image dimensions are too large.", 413)
 
@@ -509,6 +534,7 @@ def recognize_burst(frames: list[bytes], zone=None, debug: dict | None = None) -
     in the most recent frame that had a face to look at.
     """
     cfg = current_app.config
+    validate_burst_pixel_budget(frames)
     engine = active_engine()
     started = time.perf_counter()
     min_iou = float(cfg.get("LIVENESS_TRACK_MIN_IOU", TRACK_MIN_IOU))

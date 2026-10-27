@@ -18,20 +18,21 @@ curl -L -o face_recognition_sface_2021dec.onnx https://github.com/opencv/opencv_
 If the files are absent the backend falls back to dlib automatically
 (slower, and existing SFace enrollments would have to be re-captured).
 
-## Anti-spoofing models (optional, recommended)
+## Anti-spoofing models
 
-The kiosk can reject photos and screens with the MiniFASNet models from
-[Silent-Face-Anti-Spoofing](https://github.com/minivision-ai/Silent-Face-Anti-Spoofing).
-Export them to ONNX (80x80 input, 3-class softmax, class 1 = real face) and
-place them here with these exact names:
+The kiosk uses the ONNX exports from
+[QingHeYang/Silent-Face-Anti-Spoofing-onnx](https://github.com/QingHeYang/Silent-Face-Anti-Spoofing-onnx),
+pinned at commit `584d4421d7ac42c59e640796f46e886b0095367a`. They are
+distributed under Apache-2.0; see `MINIFASNET-LICENSE.txt`. The model output
+is interpreted as 3-class logits with class 1 = real face.
 
 | File | Crop scale |
 |---|---|
 | `2.7_80x80_MiniFASNetV2.onnx` | 2.7 |
 | `4_0_0_80x80_MiniFASNetV1SE.onnx` | 4.0 |
 
-One file is enough; two are averaged. With no files present the app only
-logs a weak texture heuristic and never blocks anyone. With a model present,
-`SPOOF_MODE=auto` switches to enforcing (`SPOOF_THRESHOLD`, default 0.55).
-Test with a real photo and a phone screen on your own camera before relying
-on it, and set `SPOOF_MODE=log` if it rejects real people.
+Both files are included and averaged. In production, `SPOOF_MODE=auto` or
+`enforce` refuses startup unless at least one model loads successfully.
+`auto` enforces the model score using `SPOOF_THRESHOLD` (default 0.55).
+Validate this threshold with representative live users, printed photos and
+screen replays from the deployment camera before enabling attendance use.

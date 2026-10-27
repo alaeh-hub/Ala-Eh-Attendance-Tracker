@@ -3,6 +3,8 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 
 from app import create_app
 from app.config_check import InsecureConfigError, config_problems
@@ -59,6 +61,17 @@ class ConfigCheckTests(unittest.TestCase):
             create_app(Safe)
         self.assertIn("SQLite", str(ctx.exception))
         self.assertNotIn("SECRET_KEY", str(ctx.exception))
+
+    def test_production_auto_spoof_mode_fails_closed_without_model(self):
+        class SafePostgres(Config):
+            APP_ENV = "production"
+            SECRET_KEY, JWT_SECRET_KEY, FACE_DATA_KEY = GOOD["SECRET_KEY"], GOOD["JWT_SECRET_KEY"], GOOD["FACE_DATA_KEY"]
+            SQLALCHEMY_DATABASE_URI = GOOD["SQLALCHEMY_DATABASE_URI"]
+            SPOOF_MODE = "auto"
+        with patch("app.vision.antispoof.get_antispoof", return_value=SimpleNamespace(has_model=False)):
+            with self.assertRaises(InsecureConfigError) as ctx:
+                create_app(SafePostgres)
+        self.assertIn("MiniFASNet", str(ctx.exception))
 
     def test_development_only_warns(self):
         class Dev(Config):

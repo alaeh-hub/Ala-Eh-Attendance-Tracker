@@ -11,6 +11,8 @@ from app.models.attendance_event import AttendanceEvent
 from app.models.face_embedding import FaceEmbedding
 from app.models.scan_snapshot import ScanSnapshot
 from app.models.user import User
+from app.middleware.error_handler import AppError
+from app.services.face_service import validate_burst_pixel_budget
 from app.services.accuracy_eval import build_gallery, compute_curve, recommend
 from app.utils import crypto
 from app.vision.antispoof import resolve_mode, texture_realness
@@ -45,6 +47,22 @@ class EnhanceTests(unittest.TestCase):
     def test_disabled_flag_skips_enhancement(self):
         img = _face_image(left=200, right=90)
         self.assertIs(enhance_for_embedding(img, self.BOX, enabled=False), img)
+
+
+class BurstImageBudgetTests(unittest.TestCase):
+    @staticmethod
+    def _png_header(width, height):
+        return b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0dIHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big")
+
+    def test_accepts_burst_within_total_pixel_budget(self):
+        frames = [self._png_header(2000, 2000)] * 8
+        validate_burst_pixel_budget(frames)
+
+    def test_rejects_burst_over_total_pixel_budget_before_decode(self):
+        frames = [self._png_header(2000, 2000)] * 9
+        with self.assertRaises(AppError) as err:
+            validate_burst_pixel_budget(frames)
+        self.assertEqual(err.exception.status_code, 413)
 
 
 class JitterTests(unittest.TestCase):

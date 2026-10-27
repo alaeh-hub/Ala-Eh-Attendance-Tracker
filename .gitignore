@@ -41,6 +41,9 @@ frontend/coverage/
 # Root-level stray lockfile (real one lives in frontend/)
 /package-lock.json
 
+# Generated end-to-end test pack
+/docs/E2E_TEST_PACK.pdf
+
 # Editors / OS
 .vs/
 .vscode/

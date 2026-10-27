@@ -42,6 +42,11 @@ class EndToEndTests(BaseAppTest):
         stack.enter_context(mock.patch.object(self.engine, "embed", side_effect=lambda *a, **k: self.current_face))
         stack.enter_context(mock.patch("app.services.face_service.assess_quality", return_value={"ok": True, "score": 0.9, "reason": None}))
         stack.enter_context(mock.patch("app.services.face_service.frame_ear", side_effect=itertools.cycle(BLINK_BURST)))
+        # Camera bytes are synthetic; anti-spoof behavior is covered by its
+        # focused tests, so make the model verdict deterministic in this flow.
+        spoof = mock.Mock(has_model=True)
+        spoof.score.return_value = {"score": 0.99, "method": "model"}
+        stack.enter_context(mock.patch("app.services.face_service.get_antispoof", return_value=spoof))
 
     # -- helpers -----------------------------------------------------------
     def login_admin(self):

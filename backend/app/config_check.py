@@ -58,6 +58,16 @@ def config_problems(cfg) -> list[str]:
 def enforce(app) -> None:
     """Raise in production, warn elsewhere."""
     problems = config_problems(app.config)
+    # `auto` resolves to log-only when no MiniFASNet model loads. That silent
+    # downgrade is unsafe in production, so verify the models actually load.
+    if app.config.get("APP_ENV") == "production" and str(app.config.get("SPOOF_MODE", "auto")).lower() in ("auto", "enforce"):
+        try:
+            from app.vision.antispoof import get_antispoof
+            if not get_antispoof().has_model:
+                problems.append("SPOOF_MODE requires a loadable MiniFASNet model in backend/models.")
+        except Exception as exc:  # fail closed if model initialization itself breaks
+            logger.exception("anti-spoof model initialization failed")
+            problems.append(f"Anti-spoof model initialization failed ({type(exc).__name__}).")
     if not problems:
         return
     if app.config.get("APP_ENV") == "production":
