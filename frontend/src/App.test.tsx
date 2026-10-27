@@ -50,8 +50,25 @@ describe("route guards", () => {
     refreshSession.mockReset();
     hasRefreshCookie.mockReset().mockReturnValue(false);
     // The Records page's endpoints answer with plain arrays; the other pages read a page object.
+    const emptyToday = {
+      date: "2026-01-01",
+      timezone: "UTC",
+      total_employees: 0,
+      enrolled: 0,
+      present: 0,
+      currently_in: 0,
+      late: 0,
+      absent: 0,
+      events_today: 0,
+      hourly: [],
+      departments: [],
+    };
     get.mockImplementation(async (url: string) => ({
-      data: ["/attendance", "/reports/daily", "/users/departments"].includes(url) ? [] : { items: [], total: 0, pending_count: 0 },
+      data: ["/attendance", "/reports/daily", "/users/departments"].includes(url)
+        ? []
+        : url === "/reports/today"
+          ? emptyToday
+          : { items: [], total: 0, pending_count: 0 },
       headers: {},
     }));
     post.mockResolvedValue({ data: {} });
