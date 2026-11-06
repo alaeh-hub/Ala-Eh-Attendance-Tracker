@@ -135,6 +135,9 @@ class Config:
     # disable the rule for unconfigured departments.
     SHIFT_END = os.environ.get("SHIFT_END", "17:00")
     LATE_GRACE_MINUTES = int(os.environ.get("LATE_GRACE_MINUTES", 15))
+    # Small clock/rounding tolerance so a one-minute-early scan is not
+    # reported as a departure violation. Set to 0 for strict schedules.
+    EARLY_GRACE_MINUTES = int(os.environ.get("EARLY_GRACE_MINUTES", 5))
     # Default lunch break window (HH:MM, org timezone) used for any
     # department that hasn't configured its own break_start/break_end.
     # Time inside this window is excluded from worked-hours totals.

@@ -20,7 +20,7 @@ from app.models.attendance_event import AttendanceEvent
 from app.models.audit_log import AuditLog
 from app.models.department import Department
 from app.models.user import User
-from app.services.attendance_service import event_payload, record_attendance
+from app.services.attendance_service import early_minutes, event_payload, record_attendance
 from app.utils.audit import log_action
 from config import Config
 
@@ -142,11 +142,28 @@ class OvernightFixedShiftTests(Base):
         ev_out = self.punch(self.user, local(self.next, 5, 0), "CLOCK_OUT")
         self.assertEqual(ev_in.late_minutes, 25)  # 15 min grace
         self.assertEqual(ev_out.session, "PM")
-        self.assertEqual(ev_out.early_minutes, 60)
+        self.assertEqual(ev_out.early_minutes, 55)
         row = self.daily(self.day)[0]
         self.assertTrue(row["late"])
         self.assertEqual(row["late_minutes"], 25)
-        self.assertEqual(row["early_minutes"], 60)
+        self.assertEqual(row["early_minutes"], 55)
+
+    def test_early_grace_is_applied_to_previously_stamped_punches(self):
+        event = AttendanceEvent(
+            user_id=self.user.id, event_type="CLOCK_OUT", session="PM", timestamp=local(self.next, 5, 59),
+            match_score=0.9, match_status="MANUAL", work_date=self.day,
+            scheduled_start="22:00", scheduled_end="06:00", early_minutes=1,
+        )
+        db.session.add(event)
+        db.session.commit()
+        self.assertIsNone(early_minutes(event))
+
+    def test_missed_time_out_is_explicit_and_does_not_inflate_hours(self):
+        self.punch(self.user, local(self.day, 22, 0), "CLOCK_IN", "AM")
+        row = self.daily(self.day)[0]
+        self.assertTrue(row["open"])
+        self.assertTrue(row["no_time_out"])
+        self.assertEqual(row["hours"], 0)
 
     def test_break_punches_split_halves_after_midnight(self):
         self.punch(self.user, local(self.day, 22, 0), "CLOCK_IN")
@@ -398,7 +415,7 @@ class ManualEntryAndCorrectionTests(Base):
                                 json={"event_type": "CLOCK_OUT", "session": "PM"})
         self.assertEqual(res.status_code, 200, res.json)
         self.assertEqual((res.json["event_type"], res.json["session"]), ("CLOCK_OUT", "PM"))
-        self.assertEqual(res.json["early_minutes"], 60)
+        self.assertEqual(res.json["early_minutes"], 55)
         self.assertIsNone(res.json["late_minutes"])
 
     def test_correction_rejects_future_and_bad_values(self):
@@ -501,6 +518,43 @@ class ReportGroupingTests(Base):
             "from": self.day.isoformat(), "to": nxt.isoformat(), "user_id": night.id})
         self.assertEqual(pdf.status_code, 200)
         self.assertTrue(pdf.data.startswith(b"%PDF"))
+
+    def test_hours_summary_pdf_follows_the_date_range_and_search(self):
+        self.department("Ops", start_time="08:00", end_time="17:00")
+        omar = self.employee("Omar Ops", "Ops")
+        ana = self.employee("Ana Ops", "Ops")
+        for user in (omar, ana):
+            self.punch(user, local(self.day, 9, 0), "CLOCK_IN")
+            self.punch(user, local(self.day, 17, 0), "CLOCK_OUT")
+        day = self.day.isoformat()
+        res = self.client.get("/api/reports/hours-summary.pdf", headers=self.auth(), query_string={"from": day, "to": day})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.mimetype, "application/pdf")
+        self.assertTrue(res.data.startswith(b"%PDF"))
+        self.assertIn("hours-summary_", res.headers["Content-Disposition"])
+        searched = self.client.get("/api/reports/hours-summary.pdf", headers=self.auth(), query_string={"from": day, "to": day, "q": "omar"})
+        self.assertEqual(searched.status_code, 200)
+        self.assertNotEqual(len(searched.data), len(res.data))
+        empty = self.client.get("/api/reports/hours-summary.pdf", headers=self.auth(), query_string={"from": "2001-01-01", "to": "2001-01-02"})
+        self.assertEqual(empty.status_code, 200)
+        too_long = self.client.get("/api/reports/hours-summary.pdf", headers=self.auth(), query_string={"from": "2026-01-01", "to": "2026-12-31"})
+        self.assertEqual(too_long.status_code, 400)
+
+    def test_headcount_ignores_portal_logins_and_kiosk_devices(self):
+        self.department("Ops", start_time="08:00", end_time="17:00")
+        self.employee("Omar Ops", "Ops")
+        counted = self.client.get("/api/reports/today", headers=self.auth()).json["total_employees"]
+        for role in ("ADMIN", "OPERATOR", "KIOSK"):
+            db.session.add(User(full_name=f"{role} login", email=f"{role.lower()}@portal.test", password_hash="x", role=role))
+        db.session.commit()
+        today = self.client.get("/api/reports/today", headers=self.auth()).json
+        self.assertEqual(today["total_employees"], counted)
+        self.assertEqual(today["absent"], counted)
+        self.assertNotIn("Unassigned", [d["department"] for d in today["departments"]])
+        # an admin who is also an employee (has an employee ID) still counts
+        db.session.add(User(full_name="Working Admin", email="wa@portal.test", password_hash="x", role="ADMIN", employee_code="E-ADM"))
+        db.session.commit()
+        self.assertEqual(self.client.get("/api/reports/today", headers=self.auth()).json["total_employees"], counted + 1)
 
     def test_late_flag_ignores_an_ot_time_in_before_the_shift(self):
         self.department("Ops", start_time="08:00", end_time="17:00")

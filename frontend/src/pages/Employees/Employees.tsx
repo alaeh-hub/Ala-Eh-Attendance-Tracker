@@ -10,6 +10,7 @@ import { useAuthStore } from "../../stores/authStore";
 import { toast } from "../../stores/toastStore";
 import type { Department, User } from "../../types";
 import { smartMatch } from "../../utils/search";
+import { Select } from "../../components/fields";
 
 type StatusFilter = "all" | "active" | "inactive" | "not_enrolled";
 type DeleteResult = { deleted?: boolean; archived?: boolean; id?: string };
@@ -139,26 +140,26 @@ export default function Employees() {
         }
       />
 
-      <div className="card mb-4 flex flex-col gap-3 p-3 sm:flex-row sm:items-center animate-fade-up">
+      <div className="bar mb-4 flex flex-col gap-3 sm:flex-row sm:items-center animate-fade-up">
         <div className="relative flex-1">
           <Icon name="search" className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
           <input className="input pl-10" placeholder="Search name, ID, email, position…" aria-label="Search employees" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
-        <select className="input sm:w-48" value={department} onChange={(e) => setDepartment(e.target.value)} aria-label="Department">
+        <Select className="input sm:w-48" value={department} onChange={(e) => setDepartment(e.target.value)} aria-label="Department">
           <option value="">All departments</option>
           {departments.map((d) => (
             <option key={d}>{d}</option>
           ))}
-        </select>
-        <select className="input sm:w-44" value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)} aria-label="Status">
+        </Select>
+        <Select className="input sm:w-44" value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)} aria-label="Status">
           <option value="all">All statuses</option>
           <option value="active">Active</option>
           <option value="inactive">Deactivated</option>
           <option value="not_enrolled">Not enrolled</option>
-        </select>
+        </Select>
       </div>
 
-      <div className="card overflow-hidden animate-fade-up" style={{ animationDelay: "80ms" }}>
+      <div className="panel overflow-hidden animate-fade-up" style={{ animationDelay: "80ms" }}>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[950px] table-fixed text-sm">
             <colgroup>
@@ -213,22 +214,21 @@ export default function Employees() {
                     </td>
                     <td className="table-cell">
                       {u.role === "KIOSK" ? (
-                        <span className="chip bg-white/[0.06] text-neutral-400 ring-1 ring-white/10" title="Kiosk device accounts don't have a face.">
+                        <span className="tag tag-muted" title="Kiosk device accounts don't have a face.">
                           Device account
                         </span>
                       ) : u.enrolled ? (
-                        <span className="chip bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/25">
-                          <Icon name="check" className="h-3 w-3" strokeWidth={3} /> {u.sample_count} samples
+                        <span className="tag tag-ok">
+                          <Icon name="check" className="h-3.5 w-3.5" strokeWidth={2.4} /> {u.sample_count} samples
                         </span>
                       ) : (
-                        <Link to={`/enroll?user=${u.id}`} className="chip bg-orange-500/10 text-orange-300 ring-1 ring-orange-500/25 hover:bg-orange-500/20">
+                        <Link to={`/enroll?user=${u.id}`} className="tag tag-warn hover:underline">
                           Not enrolled — enroll
                         </Link>
                       )}
                     </td>
                     <td className="table-cell">
-                      <span className={`inline-flex items-center gap-1.5 text-xs font-semibold ${u.is_active ? "text-emerald-300" : "text-neutral-500"}`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${u.is_active ? "bg-emerald-400" : "bg-neutral-600"}`} />
+                      <span className={`tag ${u.is_active ? "tag-ok" : "tag-muted"}`}>
                         {u.is_active ? "Active" : "Deactivated"}
                       </span>
                     </td>
@@ -423,7 +423,7 @@ function EditEmployee({ user, isSelf, departments, onClose, onSaved }: { user: U
           <input className="input" value={form.phone} onChange={set("phone")} />
         </Field>
         <Field label="Department">
-          <select
+          <Select
             className="input"
             value={form.department}
             onChange={(e) => {
@@ -438,29 +438,29 @@ function EditEmployee({ user, isSelf, departments, onClose, onSaved }: { user: U
                 {d.name}
               </option>
             ))}
-          </select>
+          </Select>
         </Field>
         <Field label="Position">
           {selectedDept && selectedDept.roles.length > 0 ? (
-            <select className="input" value={form.position} onChange={set("position")}>
+            <Select className="input" value={form.position} onChange={set("position")}>
               <option value="">Select role…</option>
               {selectedDept.roles.map((r) => (
                 <option key={r} value={r}>
                   {r}
                 </option>
               ))}
-            </select>
+            </Select>
           ) : (
             <input className="input" value={form.position} onChange={set("position")} />
           )}
         </Field>
         <Field label="Role" hint={isSelf ? "You can't change your own role." : ROLE_HELP[form.role]}>
-          <select className="input" value={form.role} onChange={set("role")} disabled={isSelf}>
+          <Select className="input" value={form.role} onChange={set("role")} disabled={isSelf}>
             <option value="STAFF">Staff</option>
             <option value="OPERATOR">Operator</option>
             <option value="ADMIN">Admin</option>
             <option value="KIOSK">Kiosk device</option>
-          </select>
+          </Select>
         </Field>
         <Field
           label={user.can_login ? "Reset password" : form.role === "KIOSK" ? "Device password *" : "Set password (enables sign-in)"}

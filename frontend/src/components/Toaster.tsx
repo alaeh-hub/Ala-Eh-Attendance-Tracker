@@ -16,7 +16,7 @@ export default function Toaster() {
         return (
           <div
             key={t.id}
-            className={`pointer-events-auto flex items-start gap-3 rounded-xl border bg-ink-850/95 p-3.5 shadow-2xl backdrop-blur animate-slide-in ${tone.cls}`}
+            className={`pointer-events-auto flex items-start gap-3 rounded-xl border bg-ink-850/95 p-3.5 animate-slide-in ${tone.cls}`}
             role={t.tone === "error" ? "alert" : "status"}
           >
             <span className={`rounded-lg p-1.5 ${tone.dot}`}>

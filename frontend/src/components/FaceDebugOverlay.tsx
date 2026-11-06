@@ -170,14 +170,14 @@ export default function FaceDebugOverlay({ debug, kind }: { debug: FaceDebugCont
           kind === "enroll" ? "top-[13.5rem] sm:top-[14.5rem]" : "top-[10rem] sm:top-[10.75rem]"
         }`}
       >
-        <div className="pointer-events-auto flex items-center justify-between gap-2 rounded-t-lg border border-white/10 bg-black/70 px-2 py-1 backdrop-blur">
-          <span className="font-bold uppercase tracking-wider text-cyan-300">Debug · {kind === "enroll" ? "enroll" : "scan"}</span>
-          <button type="button" onClick={toggle} aria-pressed={on} className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase hover:bg-white/20">
+        <div className="pointer-events-auto flex items-center justify-between gap-2 rounded-t-lg border border-white/10 bg-black/70 px-2 py-1">
+          <span className="font-bold text-cyan-300">Debug · {kind === "enroll" ? "enroll" : "scan"}</span>
+          <button type="button" onClick={toggle} aria-pressed={on} className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold hover:bg-white/20">
             {on ? "Hide" : "Show"}
           </button>
         </div>
         {on && (
-          <div className="rounded-b-lg border border-t-0 border-white/10 bg-black/60 px-2 py-1.5 backdrop-blur" aria-live="off">
+          <div className="rounded-b-lg border border-t-0 border-white/10 bg-black/60 px-2 py-1.5" aria-live="off">
             {data ? (
               <>
                 {lines.map((line, i) => (

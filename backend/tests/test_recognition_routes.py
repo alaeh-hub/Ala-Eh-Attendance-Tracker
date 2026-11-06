@@ -248,6 +248,8 @@ class EmployeeAndEnrollmentTests(BaseAppTest):
         self.assertEqual(status["outdated_samples"], 1)
 
     def test_admin_creates_employee_without_login(self):
+        db.session.add(Department(name="Production"))
+        db.session.commit()
         res = self.client.post("/api/users", headers=self.auth(), json={
             "full_name": "Maria Santos", "email": "maria@example.test",
             "department": "Production", "position": "Packer",
@@ -258,6 +260,12 @@ class EmployeeAndEnrollmentTests(BaseAppTest):
         self.assertFalse(res.json["enrolled"])
         login = self.client.post("/api/auth/login", json={"email": "maria@example.test", "password": ""})
         self.assertEqual(login.status_code, 401)
+
+    def test_admin_cannot_assign_unknown_department(self):
+        res = self.client.post("/api/users", headers=self.auth(), json={
+            "full_name": "Typo", "email": "typo@example.test", "department": "Producton"})
+        self.assertEqual(res.status_code, 400)
+        self.assertIsNone(User.query.filter_by(email="typo@example.test").first())
 
     def test_duplicate_employee_code_rejected(self):
         res = self.client.post("/api/users", headers=self.auth(), json={
@@ -367,7 +375,7 @@ class ReportTests(BaseAppTest):
         today = self.client.get("/api/reports/today", headers=self.auth()).json
         self.assertEqual(today["present"], 1)
         self.assertEqual(today["currently_in"], 1)
-        self.assertEqual(today["total_employees"], 2)
+        self.assertEqual(today["total_employees"], 1)  # the admin login has no employee ID, so it is not headcount
         daily = self.client.get("/api/reports/daily", headers=self.auth()).json
         self.assertEqual(daily[0]["user_name"], "Juan Dela Cruz")
         csv = self.client.get("/api/reports/export.csv", headers=self.auth())

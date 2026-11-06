@@ -20,12 +20,12 @@ const FILTERS: { key: Filter; label: string }[] = [
 const PAGE_SIZE = 48;
 
 const STATUS_STYLE: Record<string, { label: string; cls: string }> = {
-  MATCHED: { label: "Matched", cls: "bg-emerald-500/10 text-emerald-300 ring-emerald-500/25" },
-  NO_MATCH: { label: "Unknown face", cls: "bg-orange-500/10 text-orange-300 ring-orange-500/25" },
-  LOW_CONFIDENCE: { label: "Low confidence", cls: "bg-orange-500/10 text-orange-300 ring-orange-500/25" },
-  AMBIGUOUS_MATCH: { label: "Ambiguous", cls: "bg-orange-500/10 text-orange-300 ring-orange-500/25" },
-  SPOOF_SUSPECTED: { label: "Possible spoof", cls: "bg-red-500/10 text-red-300 ring-red-500/30" },
-  LIVENESS_FAILED: { label: "No blink", cls: "bg-white/[0.06] text-neutral-300 ring-white/10" },
+  MATCHED: { label: "Matched", cls: "tag-ok" },
+  NO_MATCH: { label: "Unknown face", cls: "tag-warn" },
+  LOW_CONFIDENCE: { label: "Low confidence", cls: "tag-warn" },
+  AMBIGUOUS_MATCH: { label: "Ambiguous", cls: "tag-warn" },
+  SPOOF_SUSPECTED: { label: "Possible spoof", cls: "tag-bad" },
+  LIVENESS_FAILED: { label: "No blink", cls: "tag-muted" },
 };
 
 type ListResponse = { items: ScanSnapshot[]; total: number; pending_count: number };
@@ -77,7 +77,7 @@ function SnapshotCard({
   const enrollable = actionable && snap.status !== "SPOOF_SUSPECTED";
   const who = snap.user_name ?? (snap.candidate_name ? `Closest: ${snap.candidate_name}` : "No close match");
   return (
-    <div className="card overflow-hidden animate-fade-up">
+    <div className="panel overflow-hidden animate-fade-up">
       <div className="relative aspect-[4/3] bg-black/60">
         {src ? (
           <img src={src} alt={`Scan snapshot, ${style.label.toLowerCase()}`} className="h-full w-full object-cover" />
@@ -86,8 +86,8 @@ function SnapshotCard({
             <Spinner className="h-6 w-6" />
           </div>
         )}
-        <span className={`chip absolute left-2 top-2 ring-1 ${style.cls}`}>{style.label}</span>
-        {snap.resolution && <span className="chip absolute right-2 top-2 bg-black/70 text-neutral-200">{snap.resolution === "ADDED" ? "Added as sample" : "Dismissed"}</span>}
+        <span className={`tag tag-plate absolute left-2 top-2 ${style.cls}`}>{style.label}</span>
+        {snap.resolution && <span className="tag tag-plate tag-muted absolute right-2 top-2">{snap.resolution === "ADDED" ? "Added as sample" : "Dismissed"}</span>}
       </div>
       <div className="p-3">
         <p className="truncate text-sm font-semibold text-white">{who}</p>
@@ -351,7 +351,7 @@ export default function Review() {
           ))}
         </div>
       ) : items.length === 0 ? (
-        <div className="card">
+        <div className="panel">
           <EmptyState icon="shield" title={filter === "pending" ? "Nothing to review" : "No snapshots here"} message="Unknown faces, low-confidence scans and suspected spoofs show up here." />
         </div>
       ) : (

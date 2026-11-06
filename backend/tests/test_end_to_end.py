@@ -19,6 +19,7 @@ from flask import g
 
 from app.extensions import db
 from app.models.attendance_event import AttendanceEvent
+from app.models.department import Department
 from app.models.face_embedding import FaceEmbedding
 from app.models.scan_snapshot import ScanSnapshot
 from app.services import snapshot_service
@@ -81,6 +82,8 @@ class EndToEndTests(BaseAppTest):
     # -- the journey -------------------------------------------------------
     def test_full_attendance_journey(self):
         admin = self.login_admin()
+        db.session.add(Department(name="Production"))
+        db.session.commit()
 
         # 1. Admin creates an employee.
         res = self.client.post("/api/users", headers=admin, json={

@@ -1,4 +1,5 @@
 import logging
+import threading
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 
@@ -45,6 +46,7 @@ DEFAULT_SHIFT_MATCH_WINDOW_HOURS = 4
 # How far back to look for the employee's current work day. Longer than any
 # work day window (24h) plus slack for long shifts.
 _HISTORY_LOOKBACK = timedelta(hours=36)
+_sqlite_write_lock = threading.RLock()
 
 
 class CooldownActive(Exception):
@@ -249,11 +251,12 @@ class WorkDay:
         return max(0, int((local - cutoff).total_seconds() // 60))
 
     def early_minutes_at(self, local: datetime) -> int | None:
-        """Minutes before the scheduled end (0 = on time), or None with no end."""
+        """Minutes before the scheduled end beyond the configured grace."""
         end = self.end_dt
         if end is None:
             return None
-        return max(0, int((end - local).total_seconds() // 60))
+        grace = _cfg_number("EARLY_GRACE_MINUTES", 5)
+        return max(0, int(((end - timedelta(minutes=grace)) - local).total_seconds() // 60))
 
 
 # --- schedules ---------------------------------------------------------------
@@ -677,7 +680,14 @@ def early_minutes(event: AttendanceEvent) -> int | None:
     """Minutes left early for the final PM departure punch, or None if not
     applicable / the employee left on time or later. Stored when available."""
     if event.work_date is not None:
-        return event.early_minutes or None
+        # Re-evaluate against the stamped historical schedule so changing
+        # EARLY_GRACE_MINUTES also fixes existing records. The raw stamped
+        # column remains available for audit and schedule snapshots remain
+        # authoritative if the department schedule later changes.
+        if event.event_type != "CLOCK_OUT" or event.session != "PM" or not event.scheduled_end:
+            return None
+        work_day = WorkDay.build(event.work_date, event.scheduled_start, event.scheduled_end, None, None)
+        return work_day.early_minutes_at(to_org_tz(event.timestamp)) or None
     if event.event_type != "CLOCK_OUT" or event.session != "PM" or not event.user:
         return None
     return event_work_day(event).early_minutes_at(to_org_tz(event.timestamp)) or None
@@ -689,11 +699,11 @@ def is_late(event: AttendanceEvent) -> bool:
 
 # --- writing -----------------------------------------------------------------
 
-def record_attendance(user_id: str, match_score: float, match_status: str,
-                      liveness_passed: bool, device_id: str = None,
-                      event_type: str | None = None, session: str | None = None,
-                      timestamp: datetime | None = None,
-                      notes: str | None = None, enforce_cooldown: bool = True) -> AttendanceEvent:
+def _record_attendance(user_id: str, match_score: float, match_status: str,
+                       liveness_passed: bool, device_id: str = None,
+                       event_type: str | None = None, session: str | None = None,
+                       timestamp: datetime | None = None,
+                       notes: str | None = None, enforce_cooldown: bool = True) -> AttendanceEvent:
     # PostgreSQL locks this employee row until commit. Concurrent scans for
     # the same employee then re-check the latest event sequentially, avoiding
     # duplicate events that can pass a check-then-insert cooldown race.
@@ -811,6 +821,24 @@ def record_attendance(user_id: str, match_score: float, match_status: str,
         round(match_score, 4), match_status, liveness_passed, device_id,
     )
     return event
+
+
+def record_attendance(user_id: str, match_score: float, match_status: str,
+                      liveness_passed: bool, device_id: str = None,
+                      event_type: str | None = None, session: str | None = None,
+                      timestamp: datetime | None = None,
+                      notes: str | None = None, enforce_cooldown: bool = True) -> AttendanceEvent:
+    """Serialize SQLite check-then-write operations within the server process.
+
+    SQLite ignores SELECT FOR UPDATE, unlike PostgreSQL. The application is
+    configured for one worker, so this lock closes the threaded kiosk race.
+    """
+    if db.engine.dialect.name == "sqlite" and enforce_cooldown:
+        with _sqlite_write_lock:
+            return _record_attendance(user_id, match_score, match_status, liveness_passed,
+                                      device_id, event_type, session, timestamp, notes, enforce_cooldown)
+    return _record_attendance(user_id, match_score, match_status, liveness_passed,
+                              device_id, event_type, session, timestamp, notes, enforce_cooldown)
 
 
 def restamp_event(event: AttendanceEvent) -> None:

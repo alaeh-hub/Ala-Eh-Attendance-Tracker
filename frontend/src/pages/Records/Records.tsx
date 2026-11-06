@@ -11,12 +11,29 @@ import { toast } from "../../stores/toastStore";
 import type { AttendanceEvent, DailyRow } from "../../types";
 import { datetimeLocalToApi, formatDate, formatTime, orgDate, orgMonthStart, toDatetimeLocal } from "../../utils/orgTime";
 import { smartMatch } from "../../utils/search";
+import { Select, DateField, DateTimeField } from "../../components/fields";
 
 type EventRow = AttendanceEvent;
 /** Daily-report fields added by the backend (row `date` is the shift's work day). */
 type DayRow = DailyRow;
 
 type PresetKey = "today" | "yesterday" | "week" | "month";
+
+const ROWS_PER_PAGE = 200;
+
+/**
+ * A shift whose last punch is a clock-in is only "on site" while that work day can still be running. Anything older was never
+ * closed. Yesterday's shift may still be running when it is a night shift that started yesterday.
+ */
+function missedTimeOut(r: DayRow): boolean {
+  if (typeof r.no_time_out === "boolean") return r.no_time_out;
+  if (!r.open || r.last_out) return false;
+  const yesterday = orgDate(-1);
+  if (r.date < yesterday) return true;
+  if (r.date > yesterday) return false;
+  const overnight = !!r.scheduled_start && !!r.scheduled_end && r.scheduled_end <= r.scheduled_start;
+  return !overnight;
+}
 
 /** Date presets in the organisation's timezone, not the browser's. */
 function preset(kind: PresetKey): [string, string] {
@@ -120,6 +137,8 @@ export default function Records() {
   }, [load]);
 
   const dailyRows = daily.filter((r) => smartMatch(search, [r.user_name, r.employee_code, r.department]));
+  const [shown, setShown] = useState(ROWS_PER_PAGE);
+  useEffect(() => setShown(ROWS_PER_PAGE), [daily, search]);
   // Operators can't use the employee picker (it needs the admin-only user list), so their
   // text filter narrows the page that is loaded.
   const pageFilter = !isAdmin && !isStaff;
@@ -135,11 +154,12 @@ export default function Records() {
     [dailyRows]
   );
 
-  async function exportCsv() {
+  async function exportPdf() {
     setExporting(true);
     try {
-      await downloadFile("/reports/export.csv", params, `attendance_${from || "all"}_${to || "all"}.csv`);
-      toast.success("Export ready", "CSV downloaded — opens in Excel.");
+      // A summary of the hours worked in the selected dates (and department / search), not the clock-in and out log.
+      await downloadFile("/reports/hours-summary.pdf", cleanParams({ from, to, department, q: search.trim() }), `hours-summary_${from}_${to}.pdf`, "Preparing your PDF");
+      toast.success("PDF ready", "Hours summary downloaded.");
     } catch (err) {
       toast.error("Export failed", errorMessage(err));
     } finally {
@@ -183,15 +203,15 @@ export default function Records() {
                   <Icon name="plus" className="h-4 w-4" /> Manual entry
                 </button>
               )}
-              <button className="btn-primary" onClick={exportCsv} disabled={exporting}>
-                {exporting ? <Spinner /> : <Icon name="download" className="h-4 w-4" />} Export CSV
+              <button className="btn-primary" onClick={exportPdf} disabled={exporting}>
+                {exporting ? <Spinner /> : <Icon name="download" className="h-4 w-4" />} Export PDF
               </button>
             </>
           )
         }
       />
 
-      <div className="card mb-4 space-y-3 p-3 animate-fade-up">
+      <div className="bar mb-4 space-y-3 animate-fade-up">
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Date range">
           {PRESETS.map((p) => (
             <button
@@ -205,9 +225,9 @@ export default function Records() {
             </button>
           ))}
           <div className="flex items-center gap-2">
-            <input type="date" className="input w-auto py-1.5" value={from} max={to || undefined} onChange={(e) => setRange([e.target.value, to])} aria-label="From date" />
+            <DateField className="input w-auto py-1.5" value={from} max={to || undefined} onChange={(e) => setRange([e.target.value, to])} aria-label="From date" />
             <span className="text-neutral-500" aria-hidden="true">→</span>
-            <input type="date" className="input w-auto py-1.5" value={to} min={from || undefined} onChange={(e) => setRange([from, e.target.value])} aria-label="To date" />
+            <DateField className="input w-auto py-1.5" value={to} min={from || undefined} onChange={(e) => setRange([from, e.target.value])} aria-label="To date" />
           </div>
         </div>
         {!isStaff && (
@@ -229,12 +249,12 @@ export default function Records() {
                 <EmployeePicker label="Employee" value={employee} onChange={setEmployee} status="all" placeholder="All employees — search to filter…" />
               </div>
             )}
-            <select className="input sm:w-52" value={department} onChange={(e) => setDepartment(e.target.value)} aria-label="Department">
+            <Select className="input sm:w-52" value={department} onChange={(e) => setDepartment(e.target.value)} aria-label="Department">
               <option value="">All departments</option>
               {departments.map((d) => (
                 <option key={d}>{d}</option>
               ))}
-            </select>
+            </Select>
           </div>
         )}
       </div>
@@ -261,13 +281,13 @@ export default function Records() {
               ["OT hours", hoursLabel(totals.otHours)],
               ["Late arrivals", String(totals.late)],
             ].map(([k, v]) => (
-              <div key={k} className="card border border-brand-500/30 px-4 py-3 transition-colors duration-200 hover:border-brand-500/50">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500">{k}</p>
+              <div key={k} className="stat">
+                <p className="text-[11px] font-semibold text-neutral-500">{k}</p>
                 <p className="mt-0.5 text-xl font-extrabold tabular-nums text-white">{loading ? "—" : v}</p>
               </div>
             ))}
           </div>
-          <div className="card overflow-hidden animate-fade-up">
+          <div className="panel overflow-hidden animate-fade-up">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[860px] table-fixed text-sm">
                 <colgroup>
@@ -293,7 +313,7 @@ export default function Records() {
                 <tbody className="divide-y divide-white/[0.04]">
                   {loading && <SkeletonRows cols={7} />}
                   {!loading &&
-                    dailyRows.map((r) => (
+                    dailyRows.slice(0, shown).map((r) => (
                       <tr key={`${r.user_id}-${r.date}`} className="hover:bg-white/[0.02]">
                         <td className="table-cell whitespace-nowrap text-neutral-400">{formatDate(r.date, SHORT_DATE)}</td>
                         <td className="table-cell">
@@ -304,21 +324,22 @@ export default function Records() {
                           <TimeWithDay iso={r.first_in} workDate={r.date} />
                         </td>
                         <td className="table-cell tabular-nums text-neutral-200">
-                          {r.last_out ? <TimeWithDay iso={r.last_out} workDate={r.date} /> : r.open ? <span className="text-emerald-300">On site</span> : "—"}
+                          {r.last_out ? <TimeWithDay iso={r.last_out} workDate={r.date} /> : r.open && !missedTimeOut(r) ? <span className="tag tag-ok">On site</span> : "—"}
                         </td>
                         <td className="table-cell font-semibold tabular-nums text-white">{hoursLabel(r.hours)}</td>
                         <td className="table-cell tabular-nums text-neutral-300">{r.ot_hours ? hoursLabel(r.ot_hours) : "—"}</td>
                         <td className="table-cell">
-                          <div className="flex flex-wrap gap-1">
+                          <div className="flex flex-col gap-0.5">
                             {r.late ? (
-                              <span className="chip bg-orange-500/10 text-orange-300 ring-1 ring-orange-500/25">Late{r.late_minutes ? ` ${formatMinutes(r.late_minutes)}` : ""}</span>
+                              <span className="tag tag-warn">Late{r.late_minutes ? ` ${formatMinutes(r.late_minutes)}` : ""}</span>
                             ) : r.first_in ? (
-                              <span className="chip bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/25">On time</span>
+                              <span className="tag tag-ok">On time</span>
                             ) : (
-                              <span className="chip bg-white/[0.06] text-neutral-400">No clock-in</span>
+                              <span className="tag tag-muted">No clock-in</span>
                             )}
+                            {missedTimeOut(r) && <span className="tag tag-warn">No time out</span>}
                             {r.early_leave && (
-                              <span className="chip bg-sky-500/10 text-sky-300 ring-1 ring-sky-500/25">Left early{r.early_minutes ? ` ${formatMinutes(r.early_minutes)}` : ""}</span>
+                              <span className="tag tag-info">Left early{r.early_minutes ? ` ${formatMinutes(r.early_minutes)}` : ""}</span>
                             )}
                           </div>
                         </td>
@@ -327,11 +348,21 @@ export default function Records() {
                 </tbody>
               </table>
             </div>
+            {!loading && dailyRows.length > shown && (
+              <div className="flex items-center justify-between border-t border-white/[0.06] px-4 py-3 text-sm text-neutral-400">
+                <span>
+                  Showing {shown} of {dailyRows.length} days
+                </span>
+                <button className="btn-ghost" onClick={() => setShown((n) => n + ROWS_PER_PAGE)}>
+                  Show {Math.min(ROWS_PER_PAGE, dailyRows.length - shown)} more
+                </button>
+              </div>
+            )}
             {!loading && dailyRows.length === 0 && <EmptyState icon="records" title="No attendance in this range" message="Pick a different date range or department." />}
           </div>
         </div>
       ) : (
-        <div className="card overflow-hidden animate-fade-up" {...(isStaff ? {} : tabPanelProps("records", "log"))}>
+        <div className="panel overflow-hidden animate-fade-up" {...(isStaff ? {} : tabPanelProps("records", "log"))}>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] table-fixed text-sm">
               <colgroup>
@@ -555,22 +586,22 @@ function ManualEntry({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
         <EmployeePicker value={employee} onChange={setEmployee} autoFocus />
         <div className="grid grid-cols-2 gap-3">
           <Field label="Event">
-            <select className="input" value={form.event_type} onChange={(e) => setForm({ ...form, event_type: e.target.value })}>
+            <Select className="input" value={form.event_type} onChange={(e) => setForm({ ...form, event_type: e.target.value })}>
               <option value="CLOCK_IN">Clock in</option>
               <option value="CLOCK_OUT">Clock out</option>
-            </select>
+            </Select>
           </Field>
           <Field label="Session">
-            <select className="input" value={form.session} onChange={(e) => setForm({ ...form, session: e.target.value })}>
+            <Select className="input" value={form.session} onChange={(e) => setForm({ ...form, session: e.target.value })}>
               <option value="">Auto (from time)</option>
               <option value="AM">AM</option>
               <option value="PM">PM</option>
               <option value="OT">OT</option>
-            </select>
+            </Select>
           </Field>
         </div>
         <Field label="Date & time" hint="Organisation time. Future times aren't accepted.">
-          <input type="datetime-local" className="input" value={form.timestamp} max={toDatetimeLocal()} onChange={(e) => setForm({ ...form, timestamp: e.target.value })} />
+          <DateTimeField className="input" value={form.timestamp} max={toDatetimeLocal()} onChange={(e) => setForm({ ...form, timestamp: e.target.value })} />
         </Field>
         <Field label="Reason">
           <input className="input" value={form.notes} maxLength={255} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="e.g. Kiosk camera offline" />
@@ -647,21 +678,21 @@ function CorrectEntry({ event, onClose, onSaved }: { event: EventRow; onClose: (
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
           <Field label="Event">
-            <select className="input" value={form.event_type} onChange={(e) => setForm({ ...form, event_type: e.target.value as EventRow["event_type"] })}>
+            <Select className="input" value={form.event_type} onChange={(e) => setForm({ ...form, event_type: e.target.value as EventRow["event_type"] })}>
               <option value="CLOCK_IN">Clock in</option>
               <option value="CLOCK_OUT">Clock out</option>
-            </select>
+            </Select>
           </Field>
           <Field label="Session">
-            <select className="input" value={form.session} onChange={(e) => setForm({ ...form, session: e.target.value as EventRow["session"] })}>
+            <Select className="input" value={form.session} onChange={(e) => setForm({ ...form, session: e.target.value as EventRow["session"] })}>
               <option value="AM">AM</option>
               <option value="PM">PM</option>
               <option value="OT">OT</option>
-            </select>
+            </Select>
           </Field>
         </div>
         <Field label="Date & time" hint="Organisation time.">
-          <input type="datetime-local" className="input" value={form.timestamp} max={toDatetimeLocal()} onChange={(e) => setForm({ ...form, timestamp: e.target.value })} />
+          <DateTimeField className="input" value={form.timestamp} max={toDatetimeLocal()} onChange={(e) => setForm({ ...form, timestamp: e.target.value })} />
         </Field>
         <Field label="Note">
           <input className="input" value={form.notes} maxLength={255} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Why this record was corrected" />

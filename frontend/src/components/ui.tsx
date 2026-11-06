@@ -1,37 +1,35 @@
 import { ReactNode, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { animate as tween } from "motion";
+import { motion } from "motion/react";
+import { EASE_OUT, motionOK } from "../lib/motion";
 import api from "../services/api";
 import Icon, { IconName } from "./Icon";
 
 /**
- * Animates a displayed integer toward `value` whenever it changes, so a
- * live stat (present count, on-site count) visibly ticks instead of
- * silently jumping — the motion signals "this just changed," not decoration.
- * Respects prefers-reduced-motion by snapping instantly.
+ * Animates a displayed integer toward `value` (motion.dev), so a live stat visibly ticks instead of silently jumping.
+ * Snaps instantly under reduced motion.
  */
-export function useCountUp(value: number, duration = 500) {
-  const [display, setDisplay] = useState(value);
-  const from = useRef(value);
+export function useCountUp(value: number, duration = 0.9) {
+  // Counts up from zero the first time it shows a value, then glides between values as they change.
+  const [display, setDisplay] = useState(() => (motionOK() ? 0 : value));
+  const shown = useRef(display);
 
   useEffect(() => {
-    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    if (reduce || value === from.current) {
-      from.current = value;
+    if (!motionOK() || value === shown.current) {
+      shown.current = value;
       setDisplay(value);
       return;
     }
-    const start = performance.now();
-    const startValue = from.current;
-    let raf = 0;
-    const tick = (now: number) => {
-      const t = Math.min(1, (now - start) / duration);
-      const eased = 1 - Math.pow(1 - t, 3);
-      setDisplay(Math.round(startValue + (value - startValue) * eased));
-      if (t < 1) raf = requestAnimationFrame(tick);
-      else from.current = value;
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    const controls = tween(shown.current, value, {
+      duration,
+      ease: EASE_OUT,
+      onUpdate: (v) => {
+        shown.current = v;
+        setDisplay(Math.round(v));
+      },
+    });
+    return () => controls.stop();
   }, [value, duration]);
 
   return display;
@@ -141,7 +139,7 @@ export function Avatar({
 
   return (
     <span
-      className={`relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-brand-400 to-brand-700 font-bold text-black ${size} ${text} ${
+      className={`relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-brand-500 font-bold text-black ${size} ${text} ${
         ring ? "ring-2 ring-brand-500/60 ring-offset-2 ring-offset-ink-900" : ""
       }`}
     >
@@ -163,15 +161,23 @@ export function PageHeader({
   leading?: ReactNode;
 }) {
   return (
-    <div className="mb-6 flex flex-col gap-4 animate-fade-up sm:flex-row sm:items-end sm:justify-between">
-      <div className="flex items-center gap-3">
-        {leading}
-        <div>
-          <h1 className="text-2xl font-extrabold tracking-tight text-white sm:text-3xl">{title}</h1>
-          {subtitle && <p className="mt-1 text-sm text-neutral-400">{subtitle}</p>}
+    <div className="mb-8 animate-fade-up">
+      <p className="section-rule mb-4" aria-hidden="true">
+        {`┌─ ${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
+      </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex items-center gap-3">
+          {leading}
+          <div>
+            <h1 className="font-display text-3xl font-bold tracking-tight text-white sm:text-4xl">
+              {title}
+              <span className="ascii-cursor text-brand-400" aria-hidden="true">_</span>
+            </h1>
+            {subtitle && <p className="mt-1 text-sm text-neutral-400" style={{ fontFamily: "var(--font-mono)" }}>{subtitle}</p>}
+          </div>
         </div>
+        {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
-      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }
@@ -195,16 +201,13 @@ export function StatCard({
   const shown = useCountUp(value);
   return (
     <div
-      className={`card group relative border border-brand-500/30 p-5 animate-fade-up transition-all duration-300 hover:-translate-y-0.5 hover:border-brand-500/50 ${
-        accent ? "bg-gradient-to-br from-brand-500/[0.14] to-ink-850/80" : ""
-      }`}
-      style={{ animationDelay: `${delay}ms` }}
+      className={`stat ${accent ? "stat-accent" : ""}`}
     >
-      <p className="text-xs font-semibold uppercase tracking-wider text-neutral-400">{label}</p>
+      <p className="text-sm font-medium text-neutral-400">{label}</p>
       {loading ? (
         <div className="skeleton mt-3 h-9 w-16" />
       ) : (
-        <p className="mt-2 text-4xl font-extrabold tabular-nums tracking-tight text-white">{shown}</p>
+        <p className={`mt-2 font-display text-6xl font-bold tabular-nums tracking-tight ${accent ? "text-brand-400" : "text-white"}`}>{shown}</p>
       )}
       {hint && <p className="mt-1 text-xs text-neutral-500">{hint}</p>}
     </div>
@@ -214,8 +217,8 @@ export function StatCard({
 export function EmptyState({ icon, title, message, action }: { icon: IconName; title: string; message?: string; action?: ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center px-6 py-14 text-center animate-fade-in">
-      <span className="mb-4 rounded-2xl border border-brand-500/20 bg-brand-500/10 p-4 text-brand-400">
-        <Icon name={icon} className="h-7 w-7" />
+      <span className="mb-4 text-brand-400">
+        <Icon name={icon} className="h-8 w-8" />
       </span>
       <p className="font-semibold text-neutral-200">{title}</p>
       {message && <p className="mt-1 max-w-sm text-sm text-neutral-500">{message}</p>}
@@ -293,16 +296,19 @@ export function Modal({
   if (!open) return null;
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm animate-fade-in" onClick={onClose} aria-hidden="true" />
-      <div
+      <div className="absolute inset-0 bg-black/70 animate-fade-in" onClick={onClose} aria-hidden="true" />
+      <motion.div
         ref={panelRef}
+        initial={motionOK() ? { opacity: 0, y: 18, scale: 0.97 } : false}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ type: "spring", stiffness: 380, damping: 32 }}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={`card relative max-h-[92vh] w-full overflow-y-auto rounded-b-none border-white/10 bg-ink-850 outline-none animate-scale-in sm:rounded-2xl ${wide ? "sm:max-w-2xl" : "sm:max-w-md"}`}
+        className={`surface relative max-h-[92vh] w-full overflow-y-auto rounded-b-none border-white/10 bg-ink-850 outline-none sm:rounded-2xl ${wide ? "sm:max-w-2xl" : "sm:max-w-md"}`}
       >
-        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.06] bg-ink-850/95 px-6 py-4 backdrop-blur">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.06] bg-ink-850/95 px-6 py-4">
           <h2 id={titleId} className="text-lg font-bold text-white">{title}</h2>
           <button onClick={onClose} className="rounded-lg p-1.5 text-neutral-400 hover:bg-white/10 hover:text-white" aria-label="Close">
             <Icon name="close" className="h-5 w-5" />
@@ -310,7 +316,7 @@ export function Modal({
         </div>
         <div className="px-6 py-5">{children}</div>
         {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-white/[0.06] px-6 py-4">{footer}</div>}
-      </div>
+      </motion.div>
     </div>,
     document.body
   );
@@ -357,15 +363,10 @@ export function ConfirmDialog({
   );
 }
 
-const ROLE_STYLES: Record<string, string> = {
-  ADMIN: "bg-brand-500/15 text-brand-300 ring-1 ring-brand-500/30",
-  OPERATOR: "bg-sky-500/10 text-sky-300 ring-1 ring-sky-500/25",
-  STAFF: "bg-white/[0.06] text-neutral-300 ring-1 ring-white/10",
-  KIOSK: "bg-violet-500/10 text-violet-300 ring-1 ring-violet-500/25",
-};
+const ROLE_TAG: Record<string, string> = { ADMIN: "tag-accent", OPERATOR: "tag-info", STAFF: "tag-muted", KIOSK: "tag-info" };
 
 export function RoleBadge({ role }: { role: string }) {
-  return <span className={`chip ${ROLE_STYLES[role] || ROLE_STYLES.STAFF}`}>{role.charAt(0) + role.slice(1).toLowerCase()}</span>;
+  return <span className={`tag ${ROLE_TAG[role] || "tag-muted"}`}>{role.charAt(0) + role.slice(1).toLowerCase()}</span>;
 }
 
 export function formatMinutes(mins: number) {
@@ -388,37 +389,29 @@ export function EventBadge({
   lateMinutes?: number | null;
   earlyMinutes?: number | null;
 }) {
-  const otPrefix = session === "OT" ? "OT " : "";
+  const overtime = session === "OT";
   return (
-    <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
-      <span
-        className={`chip ${
-          type === "CLOCK_IN"
-            ? session === "OT"
-              ? "bg-violet-500/10 text-violet-300 ring-1 ring-violet-500/25"
-              : "bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/25"
-            : "bg-white/[0.06] text-neutral-300 ring-1 ring-white/10"
-        }`}
-      >
-        <Icon name={type === "CLOCK_IN" ? "login" : "logout"} className="h-3 w-3" strokeWidth={2.4} />
-        {otPrefix}
+    <span className="inline-flex flex-wrap items-center justify-end gap-x-3 gap-y-0.5">
+      <span className={`tag ${type === "CLOCK_IN" ? (overtime ? "tag-info" : "tag-ok") : "tag-muted"}`}>
+        <Icon name={type === "CLOCK_IN" ? "login" : "logout"} className="h-3.5 w-3.5" strokeWidth={2.2} />
+        {overtime ? "OT " : ""}
         {type === "CLOCK_IN" ? "Clock in" : "Clock out"}
       </span>
       {late && (
-        <span className="chip bg-orange-500/10 text-orange-300 ring-1 ring-orange-500/25">
-          <Icon name="clock" className="h-3 w-3" strokeWidth={2.4} />
+        <span className="tag tag-warn">
+          <Icon name="clock" className="h-3.5 w-3.5" strokeWidth={2.2} />
           {lateMinutes ? `Late ${formatMinutes(lateMinutes)}` : "Late"}
         </span>
       )}
       {!!earlyMinutes && (
-        <span className="chip bg-sky-500/10 text-sky-300 ring-1 ring-sky-500/25">
-          <Icon name="clock" className="h-3 w-3" strokeWidth={2.4} />
+        <span className="tag tag-info">
+          <Icon name="clock" className="h-3.5 w-3.5" strokeWidth={2.2} />
           Left {formatMinutes(earlyMinutes)} early
         </span>
       )}
-      {!late && !earlyMinutes && session !== "OT" && (
-        <span className="chip bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/25">
-          <Icon name="check" className="h-3 w-3" strokeWidth={2.4} />
+      {!late && !earlyMinutes && !overtime && (
+        <span className="tag tag-muted">
+          <Icon name="check" className="h-3.5 w-3.5" strokeWidth={2.2} />
           Valid
         </span>
       )}

@@ -10,6 +10,7 @@ import { toast } from "../../stores/toastStore";
 import type { TodayReport } from "../../types";
 import { formatDate, formatTimeWithSeconds, orgDate, orgMonthStart } from "../../utils/orgTime";
 import { smartMatch } from "../../utils/search";
+import { Select, DateField } from "../../components/fields";
 
 interface HoursEmployee {
   user_id: string;
@@ -226,7 +227,7 @@ export default function Reports() {
 
       {tab === "hours" ? (
         <div {...tabPanelProps("reports", "hours")}>
-          <div className="card mb-4 space-y-3 p-3 animate-fade-up">
+          <div className="bar mb-4 space-y-3 animate-fade-up">
             <div className="flex flex-wrap items-center gap-2">
               {PRESETS.map((p) => (
                 <button
@@ -240,9 +241,9 @@ export default function Reports() {
                 </button>
               ))}
               <div className="flex items-center gap-2">
-                <input type="date" className="input w-auto py-1.5" value={from} max={to} onChange={(e) => e.target.value && setRange([e.target.value, to])} aria-label="From date" />
+                <DateField className="input w-auto py-1.5" value={from} max={to} onChange={(e) => e.target.value && setRange([e.target.value, to])} aria-label="From date" />
                 <span className="text-neutral-500" aria-hidden="true">→</span>
-                <input type="date" className="input w-auto py-1.5" value={to} min={from} onChange={(e) => e.target.value && setRange([from, e.target.value])} aria-label="To date" />
+                <DateField className="input w-auto py-1.5" value={to} min={from} onChange={(e) => e.target.value && setRange([from, e.target.value])} aria-label="To date" />
               </div>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">
@@ -250,12 +251,12 @@ export default function Reports() {
                 <Icon name="search" className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
                 <input className="input pl-10" placeholder="Filter by employee name or ID…" aria-label="Filter by employee" value={search} onChange={(e) => setSearch(e.target.value)} />
               </div>
-              <select className="input sm:w-52" value={department} onChange={(e) => setDepartment(e.target.value)} aria-label="Department">
+              <Select className="input sm:w-52" value={department} onChange={(e) => setDepartment(e.target.value)} aria-label="Department">
                 <option value="">All departments</option>
                 {departments.map((d) => (
                   <option key={d}>{d}</option>
                 ))}
-              </select>
+              </Select>
             </div>
           </div>
 
@@ -266,14 +267,14 @@ export default function Reports() {
               ["OT hours", hoursLabel(totals.ot)],
               ["Total hours", hoursLabel(totals.total)],
             ].map(([k, v]) => (
-              <div key={k} className="card border border-brand-500/30 px-4 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500">{k}</p>
+              <div key={k} className="stat">
+                <p className="text-[11px] font-semibold text-neutral-500">{k}</p>
                 <p className="mt-0.5 text-xl font-extrabold tabular-nums text-white">{loading ? "—" : v}</p>
               </div>
             ))}
           </div>
 
-          <div className="card overflow-hidden animate-fade-up">
+          <div className="panel overflow-hidden animate-fade-up">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[760px] text-sm">
                 <thead className="border-b border-white/[0.06] bg-white/[0.02]">
@@ -333,14 +334,14 @@ export default function Reports() {
         </div>
       ) : (
         <div {...tabPanelProps("reports", "audit")}>
-          <div className="card mb-4 flex flex-wrap items-end gap-2 p-3 animate-fade-up">
+          <div className="bar mb-4 flex flex-wrap items-end gap-2 animate-fade-up">
             <label className="block">
               <span className="label">From</span>
-              <input type="date" className="input w-auto py-1.5" value={auditFilter.from} max={auditFilter.to || undefined} onChange={(e) => setAuditFilter((f) => ({ ...f, from: e.target.value }))} />
+              <DateField className="input w-auto py-1.5" value={auditFilter.from} max={auditFilter.to || undefined} onChange={(e) => setAuditFilter((f) => ({ ...f, from: e.target.value }))} />
             </label>
             <label className="block">
               <span className="label">To</span>
-              <input type="date" className="input w-auto py-1.5" value={auditFilter.to} min={auditFilter.from || undefined} onChange={(e) => setAuditFilter((f) => ({ ...f, to: e.target.value }))} />
+              <DateField className="input w-auto py-1.5" value={auditFilter.to} min={auditFilter.from || undefined} onChange={(e) => setAuditFilter((f) => ({ ...f, to: e.target.value }))} />
             </label>
             <label className="block min-w-[220px] flex-1">
               <span className="label">Action</span>
@@ -363,7 +364,7 @@ export default function Reports() {
               </button>
             )}
           </div>
-          <div className="card overflow-hidden animate-fade-up">
+          <div className="panel overflow-hidden animate-fade-up">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[640px] text-sm">
               <thead className="border-b border-white/[0.06] bg-white/[0.02]">

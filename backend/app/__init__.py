@@ -24,7 +24,7 @@ def create_app(config_object=CONFIG):
     migrate.init_app(app, db)
     jwt.init_app(app)
     cors.init_app(app, resources={r"/api/*": {"origins": app.config["CORS_ORIGINS"]}},
-                  expose_headers=["Content-Disposition", "X-Total-Count", "Retry-After"],
+                  expose_headers=["Content-Disposition", "X-Total-Count", "X-Export-Truncated", "Retry-After"],
                   supports_credentials=True)
     socketio.init_app(app, cors_allowed_origins=_socket_origin_check(app))
 
@@ -54,6 +54,13 @@ def create_app(config_object=CONFIG):
     app.register_blueprint(review_bp, url_prefix="/api/review")
     app.register_blueprint(admin_bp, url_prefix="/api/admin")
     app.register_blueprint(meta_bp, url_prefix="/api/meta")
+
+    @app.before_request
+    def _opportunistic_snapshot_retention():
+        # Retention must continue on quiet sites too; running the throttled
+        # purge on normal traffic avoids requiring a separate scheduler.
+        from app.services.snapshot_service import purge_old
+        purge_old()
 
     @app.get("/api/health")
     def health():

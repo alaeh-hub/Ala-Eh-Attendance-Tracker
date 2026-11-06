@@ -7,6 +7,7 @@ from app.extensions import db
 from app.middleware.error_handler import AppError
 from app.models.attendance_event import AttendanceEvent
 from app.models.face_embedding import FaceEmbedding
+from app.models.department import Department
 from app.models.scan_snapshot import ScanSnapshot
 from app.models.user import User
 from app.services.auth_service import NO_LOGIN_HASH, register_user
@@ -26,6 +27,17 @@ MAX_PAGE = 500
 PROFILE_FIELDS = {"department": 80, "position": 80, "phone": 40}
 PASSWORD_RULE = "Password must be 8 to 72 characters long."
 EMPLOYEE_CODE_RE = re.compile(r"^[A-Za-z0-9._-]{1,40}$")
+
+
+def _department_name(value):
+    """Resolve a selected department to its canonical name; reject typos."""
+    value = _clean(value, PROFILE_FIELDS["department"])
+    if value is None:
+        return None
+    dept = Department.query.filter(func.lower(Department.name) == value.lower()).first()
+    if dept is None:
+        raise AppError("Choose a department that exists, or leave this field empty.", 400)
+    return dept.name
 
 
 def _clean(value, max_len):
@@ -106,7 +118,8 @@ def create_user():
         password,
         role,
         employee_code=employee_code,
-        **{field: _clean(data.get(field), n) for field, n in PROFILE_FIELDS.items()},
+        **{field: (_department_name(data.get(field)) if field == "department" else _clean(data.get(field), n))
+           for field, n in PROFILE_FIELDS.items()},
     )
     log_action(load_current_user().id, "USER_CREATED", "user", user.id,
                {"email": user.email, "role": user.role, "employee_code": user.employee_code,
@@ -185,11 +198,9 @@ def get_user(user_id):
 
 
 @user_bp.get("/<user_id>/photo")
-@require_roles(allow_kiosk=True)  # the kiosk shows the matched employee's photo
+@require_roles("ADMIN", "OPERATOR", allow_kiosk=True)  # kiosk shows a matched employee's photo
 def get_photo(user_id):
     caller = load_current_user()
-    if caller.role == "STAFF" and caller.id != user_id:
-        raise AppError("You don't have permission to view this photo.", 403)
     user = db.session.get(User, user_id)
     if not user or user.photo is None:
         raise AppError("No photo.", 404)
@@ -242,7 +253,7 @@ def update_user(user_id):
 
     for field, n in PROFILE_FIELDS.items():
         if field in data:
-            setattr(user, field, _clean(data[field], n))
+            setattr(user, field, _department_name(data[field]) if field == "department" else _clean(data[field], n))
 
     if "password" in data and data["password"]:
         if not is_valid_password(data["password"]):

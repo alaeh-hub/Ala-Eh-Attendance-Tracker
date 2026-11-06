@@ -3,7 +3,9 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import AppShell, { homeFor } from "./components/AppShell";
 import Icon from "./components/Icon";
 import KioskShell from "./components/KioskShell";
+import KineticLoader from "./components/fx/KineticLoader";
 import Toaster from "./components/Toaster";
+import ProcessDialog from "./components/ProcessDialog";
 import Login from "./pages/Login/Login";
 import { Spinner } from "./components/ui";
 import api from "./services/api";
@@ -55,7 +57,8 @@ function HomeRedirect() {
 function BootScreen({ offline, onRetry }: { offline: boolean; onRetry: () => void }) {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-5 px-4 text-center" role="status" aria-live="polite">
-      <img src="/logo.png" alt="Ala Eh! Food Products" className="h-20 w-20 rounded-full shadow-glow" />
+      <img src="/logo.png" alt="Ala Eh! Food Products" className="h-20 w-20 rounded-full" />
+      {!offline && <KineticLoader text="Loading" />}
       {offline ? (
         <>
           <p className="flex items-center gap-2 text-sm text-neutral-300">
@@ -66,9 +69,7 @@ function BootScreen({ offline, onRetry }: { offline: boolean; onRetry: () => voi
           </button>
         </>
       ) : (
-        <p className="flex items-center gap-2 text-sm text-neutral-400">
-          <Spinner /> Loading…
-        </p>
+        <p className="sr-only">Loading…</p>
       )}
     </div>
   );
@@ -143,6 +144,7 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       <Toaster />
+      <ProcessDialog />
     </>
   );
 }

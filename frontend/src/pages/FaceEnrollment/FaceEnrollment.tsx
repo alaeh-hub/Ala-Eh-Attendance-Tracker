@@ -15,6 +15,7 @@ import type { Department, EnrollmentStatus, Role, User } from "../../types";
 import { type FaceDebug, useFaceDebug } from "../../utils/faceDebug";
 import { guideZone } from "../../utils/guideZone";
 import { type VoiceKey, chime, isVoiceKey, preloadVoice, say, sayOnce, speak, stopSpeaking, useAudioUnlock } from "../../utils/sound";
+import { Select } from "../../components/fields";
 
 const POSES: Record<string, { title: string; hint: string; arrow?: string }> = {
   frontal: { title: "Look straight ahead", hint: "Face the camera, neutral expression" },
@@ -85,7 +86,7 @@ function Stepper({ step }: { step: Step }) {
         return (
           <li key={label} className="flex flex-1 items-center gap-2 sm:gap-3">
             <span
-              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold transition-all duration-300 ${
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold transition-colors duration-300 ${
                 done ? "bg-brand-500 text-black" : active ? "bg-brand-500/15 text-brand-300 ring-2 ring-brand-500" : "bg-white/[0.05] text-neutral-500"
               }`}
             >
@@ -225,7 +226,7 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
   }
 
   return (
-    <div className="card overflow-hidden animate-fade-up">
+    <div className="panel overflow-hidden animate-fade-up sm:min-h-[46rem]">
       <div className="flex border-b border-white/[0.06]" role="tablist" aria-label="Employee">
         {(["new", "existing"] as const).map((m) => (
           <button
@@ -243,8 +244,8 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
       </div>
 
       {mode === "new" ? (
-        <form onSubmit={submit} className="p-6 animate-fade-in" noValidate>
-          <h3 className="mb-1 text-sm font-bold uppercase tracking-wider text-brand-400">Personal information</h3>
+        <form onSubmit={submit} className="p-6" noValidate>
+          <h3 className="mb-1 text-sm font-bold text-brand-400">Personal information</h3>
           <p className="mb-5 text-sm text-neutral-500">Fields marked * are required.</p>
           <div className="grid gap-5 sm:grid-cols-2">
             <Field label="Full name *" error={errors.full_name}>
@@ -261,10 +262,10 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
             </Field>
           </div>
 
-          <h3 className="mb-4 mt-8 text-sm font-bold uppercase tracking-wider text-brand-400">Work information</h3>
+          <h3 className="mb-4 mt-8 text-sm font-bold text-brand-400">Work information</h3>
           <div className="grid gap-5 sm:grid-cols-3">
             <Field label="Department">
-              <select
+              <Select
                 className="input"
                 value={form.department}
                 onChange={(e) => {
@@ -278,29 +279,29 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
                     {d.name}
                   </option>
                 ))}
-              </select>
+              </Select>
             </Field>
             <Field label="Position">
               {selectedDept && selectedDept.roles.length > 0 ? (
-                <select className="input" value={form.position} onChange={set("position")}>
+                <Select className="input" value={form.position} onChange={set("position")}>
                   <option value="">Select role…</option>
                   {selectedDept.roles.map((r) => (
                     <option key={r} value={r}>
                       {r}
                     </option>
                   ))}
-                </select>
+                </Select>
               ) : (
                 <input className="input" value={form.position} onChange={set("position")} placeholder="Line Operator" />
               )}
             </Field>
             <Field label="System role" hint={ROLE_HELP[form.role]}>
-              <select className="input" value={form.role} onChange={set("role")}>
+              <Select className="input" value={form.role} onChange={set("role")}>
                 <option value="STAFF">Staff — clocks in only</option>
                 <option value="OPERATOR">Operator — runs kiosk & reports</option>
                 <option value="ADMIN">Admin — full access</option>
                 <option value="KIOSK">Kiosk device — tablet sign-in only</option>
-              </select>
+              </Select>
             </Field>
           </div>
 
@@ -344,7 +345,7 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
           </div>
         </form>
       ) : (
-        <div className="p-6 animate-fade-in">
+        <div className="p-6">
           <div className="relative mb-4">
             <Icon name="search" className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
             <input
@@ -366,7 +367,7 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
                 key={u.id}
                 type="button"
                 onClick={() => onReady(u)}
-                className="group flex w-full items-center gap-4 rounded-xl border border-transparent p-3 text-left transition-all hover:border-brand-500/30 hover:bg-brand-500/[0.06]"
+                className="group flex w-full items-center gap-4 rounded-xl border border-transparent p-3 text-left transition-colors hover:border-brand-500/30 hover:bg-brand-500/[0.06]"
               >
                 <Avatar userId={u.id} name={u.full_name} hasPhoto={u.has_photo} size="h-11 w-11" />
                 <div className="min-w-0 flex-1">
@@ -374,9 +375,9 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
                   <p className="truncate text-xs text-neutral-500">{[u.employee_code, u.department, u.position].filter(Boolean).join(" · ") || u.email}</p>
                 </div>
                 {u.enrolled ? (
-                  <span className="chip bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/25">{u.sample_count} samples</span>
+                  <span className="tag tag-ok">{u.sample_count} samples</span>
                 ) : (
-                  <span className="chip bg-orange-500/10 text-orange-300 ring-1 ring-orange-500/25">Not enrolled</span>
+                  <span className="tag tag-warn">Not enrolled</span>
                 )}
                 <Icon name="arrow_right" className="h-4 w-4 text-neutral-600 transition-transform group-hover:translate-x-0.5 group-hover:text-brand-400" />
               </button>
@@ -742,10 +743,10 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
   const poseNumber = Math.min(captured.length + 1, poses.length);
 
   // The same glass styling as the kiosk's controls.
-  const glass = "border border-white/10 bg-black/55 backdrop-blur-md";
+  const glass = "border border-white/10 bg-black/55";
   const hudBtn = `${glass} flex h-12 min-w-12 items-center justify-center gap-2 rounded-full px-4 text-base font-semibold text-white transition-colors hover:bg-black/75 active:scale-95`;
   const dockBtn =
-    "flex h-14 min-w-14 items-center justify-center gap-2 rounded-2xl px-4 text-base font-bold transition-all active:scale-[.97] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 sm:h-16 sm:text-lg";
+    "flex h-14 min-w-14 items-center justify-center gap-2 rounded-2xl px-4 text-base font-bold transition-colors active:scale-[.97] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 sm:h-16 sm:text-lg";
   const ghostBtn = `${dockBtn} border border-white/15 bg-white/[0.06] text-neutral-100 hover:bg-white/10`;
 
   const needsConsent = !!status && !status.consent_recorded && !consent;
@@ -791,7 +792,7 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
         <div className="flex min-w-0 items-center gap-3 sm:gap-4">
           <Avatar userId={employee.id} name={employee.full_name} hasPhoto={!!status?.has_photo} size="h-12 w-12 sm:h-16 sm:w-16" text="text-base" version={count} ring />
           <div className="min-w-0 drop-shadow">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-400">Enrolling</p>
+            <p className="text-xs font-semibold text-brand-400">Enrolling</p>
             <p className="truncate text-xl font-extrabold leading-tight text-white sm:text-3xl">{employee.full_name}</p>
             <p className="truncate text-xs text-neutral-300 sm:text-sm">{[employee.employee_code, employee.department].filter(Boolean).join(" · ")}</p>
           </div>
@@ -837,7 +838,7 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
                     {pose.arrow ?? <Icon name="scan" className="h-8 w-8" strokeWidth={2.2} />}
                   </span>
                   <div className="min-w-0">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-brand-300">
+                    <p className="text-xs font-semibold text-brand-300">
                       Pose {poseNumber} of {poses.length}
                     </p>
                     <p className="text-2xl font-extrabold leading-tight text-white sm:text-3xl">{pose.title}</p>
@@ -848,7 +849,7 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
                   )}
                 </div>
                 <div className="h-1.5 bg-white/10" aria-hidden="true">
-                  <div className={`h-full transition-all duration-200 ${readiness?.ready ? "bg-emerald-400" : "bg-orange-400"}`} style={{ width: `${Math.round((readiness?.score ?? 0) * 100)}%` }} />
+                  <div className={`h-full transition-colors duration-200 ${readiness?.ready ? "bg-emerald-400" : "bg-orange-400"}`} style={{ width: `${Math.round((readiness?.score ?? 0) * 100)}%` }} />
                 </div>
               </div>
             )
@@ -857,7 +858,7 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
       )}
 
       {cameraError && (
-        <p role="alert" className="absolute inset-x-4 top-48 mx-auto flex max-w-xl items-center gap-2 rounded-xl border border-red-500/40 bg-black/80 px-4 py-3 text-sm text-red-300 backdrop-blur">
+        <p role="alert" className="absolute inset-x-4 top-48 mx-auto flex max-w-xl items-center gap-2 rounded-xl border border-red-500/40 bg-black/80 px-4 py-3 text-sm text-red-300">
           <Icon name="alert" className="h-4 w-4 shrink-0" /> {cameraError}
         </p>
       )}
@@ -900,7 +901,7 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
                 </button>
               )}
               {ready && !auto && (
-                <button type="button" onClick={capture} className={`${dockBtn} flex-1 bg-brand-500 text-black shadow-[0_0_40px_-8px_rgba(245,192,0,.8)] hover:bg-brand-400`} disabled={busy || !!blocking || !readiness?.ready || !consentOk}>
+                <button type="button" onClick={capture} className={`${dockBtn} flex-1 bg-brand-500 text-black hover:bg-brand-400`} disabled={busy || !!blocking || !readiness?.ready || !consentOk}>
                   {busy ? <Spinner /> : <Icon name="camera" className="h-5 w-5" />} {readiness?.ready ? "Capture pose" : "Not ready yet"}
                 </button>
               )}
@@ -979,7 +980,7 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
               </svg>
             </span>
           </div>
-          <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-400">All poses captured</p>
+          <p className="text-sm font-semibold text-brand-400">All poses captured</p>
           <p className="mt-1 text-2xl font-extrabold text-white sm:text-3xl">{employee.full_name}</p>
           <p className="mt-1 text-sm text-neutral-400">{count} face samples saved. The camera is turned off.</p>
           <div className="mt-6 grid gap-2">
@@ -1011,7 +1012,7 @@ function CaptureStep({ employee, onBack, onDone }: { employee: User; onBack: () 
 function KioskPanel({ children, tone }: { children: React.ReactNode; tone: "success" | "info" | "warn" | "error" }) {
   const border = { success: "border-emerald-400/40", info: "border-brand-500/40", warn: "border-orange-400/40", error: "border-red-500/40" }[tone];
   return (
-    <div className="absolute inset-0 z-10 flex overflow-y-auto bg-black/75 p-4 backdrop-blur-md animate-fade-in">
+    <div className="absolute inset-0 z-10 flex overflow-y-auto bg-black/75 p-4 animate-fade-in">
       <div className={`m-auto w-full max-w-md rounded-3xl border bg-black/60 p-6 text-center animate-scale-in sm:p-8 ${border}`}>{children}</div>
     </div>
   );
@@ -1032,8 +1033,8 @@ function DoneStep({ employee, onAnother }: { employee: User; onAnother: () => vo
     ["Web sign-in", employee.can_login ? "Enabled" : "Kiosk only"],
   ];
   return (
-    <div className="card mx-auto max-w-xl overflow-hidden animate-scale-in">
-      <div className="relative flex flex-col items-center bg-gradient-to-b from-brand-500/15 to-transparent px-6 pb-6 pt-10 text-center">
+    <div className="panel mx-auto max-w-xl overflow-hidden animate-scale-in">
+      <div className="relative flex flex-col items-center border-b border-ink-700 px-6 pb-6 pt-10 text-center">
         <div className="relative">
           <span className="absolute -inset-3 rounded-full bg-emerald-500/20 animate-pulse-ring" />
           <Avatar userId={employee.id} name={employee.full_name} hasPhoto={employee.has_photo} size="h-28 w-28" text="text-3xl" ring version={1} />

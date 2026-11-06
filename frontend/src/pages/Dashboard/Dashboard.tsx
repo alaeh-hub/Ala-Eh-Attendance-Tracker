@@ -4,6 +4,7 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { Mascot } from "page-mascot";
 import { Socket, io } from "socket.io-client";
 import Icon from "../../components/Icon";
+import { UnderlineLink } from "../../components/fx/UnderlineLink";
 import { Avatar, EmptyState, EventBadge, PageHeader, StatCard, formatDateTime, formatTime, timeAgo } from "../../components/ui";
 import api, { SOCKET_URL, getAccessToken, isAuthFailure, refreshOrExpire } from "../../services/api";
 import { formatDate, orgNow, useOrgStore } from "../../utils/orgTime";
@@ -24,7 +25,7 @@ function hourLabel(h: number) {
 function ChartTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-xl border border-white/10 bg-ink-850/95 px-3 py-2 text-xs shadow-2xl backdrop-blur">
+    <div className="rounded-xl border border-white/10 bg-ink-850/95 px-3 py-2 text-xs">
       <p className="mb-1 font-semibold text-white">
         {hourLabel(label)}m – {hourLabel((label + 1) % 24)}m
       </p>
@@ -144,14 +145,6 @@ export default function Dashboard() {
         }
         actions={
           <>
-            <span
-              role="status"
-              title={conn === "live" ? "Receiving scans in real time" : "Live updates paused; the page still refreshes every minute"}
-              className={`chip py-1.5 ${conn === "live" ? "bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/25" : "bg-orange-500/10 text-orange-300 ring-1 ring-orange-500/25"}`}
-            >
-              <span className={`h-2 w-2 rounded-full ${conn === "live" ? "bg-emerald-400 animate-pulse" : "bg-orange-400"}`} />
-              {conn === "live" ? "Live" : conn === "connecting" ? "Connecting…" : "Reconnecting…"}
-            </span>
             <Link to="/kiosk" className="btn-primary">
               <Icon name="scan" className="h-4 w-4" /> Open kiosk
             </Link>
@@ -173,7 +166,7 @@ export default function Dashboard() {
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.6fr_1fr]">
-        <section className="card min-w-0 p-5 animate-fade-up" style={{ animationDelay: "200ms" }}>
+        <section className="panel min-w-0 py-5 animate-fade-up" style={{ animationDelay: "200ms" }}>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="font-bold text-white">Activity by hour</h2>
@@ -188,7 +181,7 @@ export default function Dashboard() {
               ))}
             </div>
           </div>
-          <div className="h-64">
+          <div className="h-72">
             {loading ? (
               <div className="skeleton h-full w-full" />
             ) : (
@@ -206,7 +199,8 @@ export default function Dashboard() {
             )}
           </div>
           {/* Accessible table view of the chart */}
-          <table className="sr-only">
+          <div className="sr-only">
+          <table>
             <caption>Scans per hour today</caption>
             <thead>
               <tr><th>Hour</th><th>Clock in</th><th>Clock out</th></tr>
@@ -217,6 +211,7 @@ export default function Dashboard() {
               ))}
             </tbody>
           </table>
+          </div>
 
           {report && report.departments.length > 0 && (
             <div className="mt-6 border-t border-white/[0.06] pt-5">
@@ -233,7 +228,7 @@ export default function Dashboard() {
                         </span>
                       </div>
                       <div className="h-2 overflow-hidden rounded-full bg-white/[0.06]">
-                        <div className="h-full rounded-full bg-gradient-to-r from-brand-600 to-brand-400 transition-all duration-700" style={{ width: `${pct}%` }} />
+                        <div data-grow className="h-full rounded-full bg-brand-500" style={{ width: `${pct}%` }} />
                       </div>
                     </div>
                   );
@@ -243,14 +238,14 @@ export default function Dashboard() {
           )}
         </section>
 
-        <section className="card flex min-w-0 flex-col animate-fade-up" style={{ animationDelay: "260ms" }}>
+        <section className="panel flex min-w-0 flex-col animate-fade-up xl:h-0 xl:min-h-full" style={{ animationDelay: "260ms" }}>
           <div className="flex items-center justify-between border-b border-white/[0.06] px-5 py-4">
             <h2 className="font-bold text-white">Live feed</h2>
-            <Link to="/records" className="text-xs font-semibold text-brand-400 hover:text-brand-300">
-              View all →
-            </Link>
+            <UnderlineLink to="/records" className="text-xs font-semibold text-brand-400">
+              View all
+            </UnderlineLink>
           </div>
-          <div className="max-h-[560px] flex-1 overflow-y-auto p-2">
+          <div className="max-h-[560px] flex-1 overflow-y-auto p-2 xl:max-h-none">
             {loading &&
               Array.from({ length: 5 }).map((_, i) => (
                 <div key={i} className="flex items-center gap-3 p-3">
@@ -265,7 +260,7 @@ export default function Dashboard() {
             {events.map((e) => (
               <div
                 key={e.id}
-                className={`flex items-center gap-3 rounded-xl p-3 transition-colors duration-700 hover:bg-white/[0.03] ${flashId === e.id ? "bg-brand-500/10 animate-slide-in" : ""}`}
+                className={`reveal-item flex items-center gap-3 rounded-xl p-3 transition-colors duration-700 hover:bg-white/[0.03] ${flashId === e.id ? "bg-brand-500/10" : ""}`}
               >
                 <Avatar userId={e.user_id} name={e.user_name} hasPhoto={e.has_photo} size="h-10 w-10" />
                 <div className="min-w-0 flex-1">

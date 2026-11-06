@@ -150,6 +150,7 @@ export interface DailyRow {
   total_hours: number;
   late: boolean;
   open: boolean;
+  no_time_out?: boolean;
   events: number;
   /** Work day the row belongs to (the date the shift started); same as `date`. */
   work_date?: string;

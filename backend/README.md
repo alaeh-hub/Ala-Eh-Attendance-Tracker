@@ -39,6 +39,7 @@ Run the tests: `python -m unittest tests.test_recognition_routes`
 | `FACE_ENGINE` | `auto` | `sface` if `models/*.onnx` exist, else `dlib` |
 | `ORG_TIMEZONE` | `Asia/Manila` | defines "today" and report times |
 | `SHIFT_START` / `LATE_GRACE_MINUTES` | `08:00` / `15` | late arrival rule |
+| `EARLY_GRACE_MINUTES` | `5` | minutes before scheduled end tolerated before flagging an early departure |
 | `ATTENDANCE_COOLDOWN_SECONDS` | `60` | ignore repeat scans |
 | `MIN_ENROLLMENT_SAMPLES` | `5` | poses needed to finish enrolling |
 | `LIVENESS_REQUIRED` | `true` | require a blink |
@@ -52,7 +53,7 @@ Run the tests: `python -m unittest tests.test_recognition_routes`
 |---|---|---|
 | `POST /api/users` | Admin | create employee (password optional for staff) |
 | `GET/PATCH/DELETE /api/users/<id>` | Admin | manage employee |
-| `GET /api/users/<id>/photo` | signed in | face thumbnail |
+| `GET /api/users/<id>/photo` | Admin/Operator or kiosk | face thumbnail |
 | `POST /api/enrollment/sample` | Admin | add one face sample |
 | `POST /api/recognition/check-in` | signed in | kiosk burst → status |
 | `GET /api/reports/today` · `/daily` · `/export.csv` | Admin/Operator | dashboard, timesheets, CSV |

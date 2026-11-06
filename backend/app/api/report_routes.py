@@ -5,6 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 
 from app.api.attendance_routes import filtered_events_query, parse_day, parse_page_args
 from app.extensions import db
@@ -25,7 +26,8 @@ from app.services.attendance_service import (
 )
 from app.services.embedding_index import active_engine, model_filter
 from app.utils.auth import load_current_user, require_roles
-from app.utils.timezone import now_in_org_tz, org_day_bounds_utc, org_tz, to_org_tz, utcnow
+from app.utils.ratelimit import rate_limit, user_key
+from app.utils.timezone import now_in_org_tz, org_day_bounds_utc, org_tz, to_naive_utc, to_org_tz, utcnow
 
 report_bp = Blueprint("reports", __name__)
 
@@ -102,6 +104,12 @@ def _day_late(events: list) -> int | None:
     return late_minutes(arrival)
 
 
+def _counts_as_employee(user: User) -> bool:
+    """Headcount is people who clock in. An admin or operator login with no employee ID, and a kiosk tablet's device
+    account, never clock in, so they must not show up as 'not yet in' every day."""
+    return user.role != "KIOSK" and bool(user.employee_code or user.role == "STAFF")
+
+
 @report_bp.get("/today")
 @require_roles("ADMIN", "OPERATOR")
 def today():
@@ -115,7 +123,7 @@ def today():
     now = utcnow()
     now_local = to_org_tz(now)
     start, end = org_day_bounds_utc()
-    active = User.query.filter(User.is_active.is_(True)).all()
+    active = [u for u in User.query.filter(User.is_active.is_(True)).all() if _counts_as_employee(u)]
     active_ids = {u.id for u in active}
     enrolled_ids = {uid for (uid,) in db.session.query(FaceEmbedding.user_id)
                     .filter(model_filter(active_engine().name)).distinct().all()}
@@ -124,6 +132,7 @@ def today():
     recent = (
         AttendanceEvent.query.filter(AttendanceEvent.timestamp >= min(start, now - timedelta(hours=48)),
                                      AttendanceEvent.timestamp < max(end, now + timedelta(minutes=1)))
+        .options(joinedload(AttendanceEvent.user))
         .order_by(AttendanceEvent.timestamp.asc())
         .all()
     )
@@ -186,7 +195,7 @@ def _range_args():
     end_day = parse_day(request.args.get("to")) or start_day
     if end_day < start_day:
         raise AppError("'to' must be on or after 'from'.", 400)
-    if (end_day - start_day).days > 92:
+    if (end_day - start_day).days > 91:
         raise AppError("Date range is limited to 92 days.", 400)
     return start_day, end_day
 
@@ -203,7 +212,7 @@ def _daily_rows(caller, start_day, end_day) -> list[dict]:
     now = utcnow()
     now_local = to_org_tz(now)
     events = (
-        filtered_events_query(caller, apply_dates=False)
+        filtered_events_query(caller, apply_dates=False).options(joinedload(AttendanceEvent.user))
         .filter(AttendanceEvent.timestamp >= org_day_bounds_utc(start_day - timedelta(days=1))[0],
                 AttendanceEvent.timestamp < org_day_bounds_utc(end_day + timedelta(days=1))[1])
         .order_by(AttendanceEvent.timestamp.asc())
@@ -229,7 +238,17 @@ def _daily_rows(caller, start_day, end_day) -> list[dict]:
         break_window = work_day.break_window
         reg_events = [e for e in evs if e.session in REGULAR_SESSIONS]
         ot_events = [e for e in evs if e.session not in REGULAR_SESSIONS]
-        open_until = now if work_day.contains(now_local) else None
+        # While the work day is still running an open shift keeps accruing; once the scheduled end has passed it is
+        # credited up to that end (not dropped), until the person punches out. Only after the work day has closed is
+        # a shift without a time out "missed": then it earns nothing until an admin corrects it.
+        in_window = work_day.contains(now_local)
+        if not in_window:
+            open_until = None
+        elif work_day.end_dt is not None and now_local >= work_day.end_dt:
+            open_until = to_naive_utc(work_day.end_dt)
+        else:
+            open_until = now
+        work_day_active = in_window
         hours = round(_worked_seconds(reg_events, break_window, open_until) / 3600, 2)
         ot_hours = round(_worked_seconds(ot_events, break_window, open_until) / 3600, 2)
         outs = [e for e in evs if e.event_type == "CLOCK_OUT"]
@@ -255,6 +274,7 @@ def _daily_rows(caller, start_day, end_day) -> list[dict]:
             "early_leave": early_by is not None,
             "early_minutes": early_by,
             "open": _chain_open(evs),
+            "no_time_out": _chain_open(evs) and not work_day_active,
             "events": len(evs),
         })
     return rows
@@ -267,11 +287,13 @@ def _hours_summary(rows: list[dict]) -> list[dict]:
         p = people.setdefault(r["user_id"], {
             "user_id": r["user_id"], "user_name": r["user_name"], "employee_code": r["employee_code"],
             "department": r["department"], "days_worked": 0, "hours": 0.0, "ot_hours": 0.0, "late_days": 0,
+            "days_without_time_out": 0,
         })
         p["days_worked"] += 1
         p["hours"] += r["hours"]
         p["ot_hours"] += r["ot_hours"]
         p["late_days"] += r["late"]
+        p["days_without_time_out"] += bool(r.get("no_time_out"))
     out = []
     for p in sorted(people.values(), key=lambda x: x["user_name"].lower()):
         p["hours"] = round(p["hours"], 2)
@@ -325,83 +347,133 @@ def _local_hhmm(iso: str | None) -> str:
 @require_roles("ADMIN")
 def hours_pdf():
     """PDF of every employee's total hours in the date range. With ?user_id
-    it also lists that employee's day-by-day breakdown."""
-    from xml.sax.saxutils import escape
-
-    from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.lib.units import mm
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    it also lists that employee's day-by-day breakdown. Styled like the
+    interface (see app/services/pdf_report.py)."""
+    from app.services.pdf_report import Section, Stat, render_report
 
     start_day, end_day = _range_args()
     rows = _daily_rows(load_current_user(), start_day, end_day)
     summary = _hours_summary(rows)
+    missed_timeouts = sum(p["days_without_time_out"] for p in summary)
 
-    styles = getSampleStyleSheet()
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm,
-                            topMargin=15 * mm, bottomMargin=15 * mm, title="Employee hours report")
-
-    def table(data, widths, total_row=False):
-        style = [
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f4f6")]),
-            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#d1d5db")),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ]
-        if total_row:
-            style.append(("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"))
-        t = Table(data, colWidths=widths, repeatRows=1)
-        t.setStyle(TableStyle(style))
-        return t
-
-    cell = lambda v: Paragraph(escape(str(v or "")), styles["Normal"])
-    story = [
-        Paragraph("Employee Hours Report", styles["Title"]),
-        Paragraph(f"Period: {start_day.isoformat()} to {end_day.isoformat()} | "
-                  f"Generated: {now_in_org_tz().strftime('%Y-%m-%d %H:%M')}", styles["Normal"]),
-    ]
+    meta = [f"period    {start_day.isoformat()} to {end_day.isoformat()}"]
     if request.args.get("department"):
-        story.append(Paragraph(f"Department: {escape(request.args['department'])}", styles["Normal"]))
-    story.append(Spacer(1, 6 * mm))
+        meta.append(f"dept      {request.args['department']}")
+    meta.append(f"created   {now_in_org_tz().strftime('%Y-%m-%d %H:%M')}")
 
+    sections = []
+    stats = []
     if summary:
-        data = [["Employee", "ID", "Department", "Days", "Regular", "OT", "Total"]]
-        for p in summary:
-            data.append([cell(p["user_name"]), cell(p["employee_code"]), cell(p["department"]), p["days_worked"],
-                         _fmt_hours(p["hours"]), _fmt_hours(p["ot_hours"]), _fmt_hours(p["total_hours"])])
-        data.append(["TOTAL", "", "", sum(p["days_worked"] for p in summary),
+        data = [[p["user_name"], p["employee_code"], p["department"], p["days_worked"],
+                 _fmt_hours(p["hours"]), _fmt_hours(p["ot_hours"]), _fmt_hours(p["total_hours"])] for p in summary]
+        data.append(["Total", "", "", sum(p["days_worked"] for p in summary),
                      _fmt_hours(sum(p["hours"] for p in summary)),
                      _fmt_hours(sum(p["ot_hours"] for p in summary)),
                      _fmt_hours(sum(p["total_hours"] for p in summary))])
-        story.append(table(data, [45 * mm, 20 * mm, 38 * mm, 14 * mm, 22 * mm, 20 * mm, 22 * mm], total_row=True))
-    else:
-        story.append(Paragraph("No attendance in this period.", styles["Normal"]))
+        sections.append(Section("Hours by employee", ["EMPLOYEE", "ID", "DEPARTMENT", "DAYS", "REGULAR", "OT", "TOTAL"], data,
+                                [48, 20, 38, 14, 22, 16, 22], total_row=True, align_right=(3, 4, 5, 6)))
+        stats = [Stat("Employees", str(len(summary)), accent=True),
+                 Stat("Regular hours", _fmt_hours(sum(p["hours"] for p in summary))),
+                 Stat("OT hours", _fmt_hours(sum(p["ot_hours"] for p in summary))),
+                 Stat("Total hours", _fmt_hours(sum(p["total_hours"] for p in summary))),
+                 Stat("Missing time-outs", str(missed_timeouts))]
 
     if request.args.get("user_id") and rows:
-        story += [Spacer(1, 8 * mm), Paragraph(f"Daily breakdown - {escape(rows[0]['user_name'])}", styles["Heading2"])]
-        detail = [["Date", "Time in", "Time out", "Regular", "OT", "Status"]]
-        for r in rows:
-            detail.append([r["date"], _local_hhmm(r["first_in"]), _local_hhmm(r["last_out"]),
-                           _fmt_hours(r["hours"]), _fmt_hours(r["ot_hours"]),
-                           "Late" if r["late"] else "On time" if r["first_in"] else "No clock-in"])
-        story.append(table(detail, [28 * mm, 24 * mm, 24 * mm, 28 * mm, 24 * mm, 30 * mm]))
+        detail = [[r["date"], _local_hhmm(r["first_in"]), _local_hhmm(r["last_out"]),
+                   _fmt_hours(r["hours"]), _fmt_hours(r["ot_hours"]),
+                   "No time out" if r.get("no_time_out") else
+                   "Late" if r["late"] else "On time" if r["first_in"] else "No clock-in"] for r in rows]
+        sections.append(Section(f"Daily breakdown: {rows[0]['user_name']}", ["DATE", "TIME IN", "TIME OUT", "REGULAR", "OT", "STATUS"],
+                                detail, [30, 26, 26, 28, 24, 32], align_right=(3, 4)))
 
-    doc.build(story)
+    pdf = render_report(title="Employee hours", slug="hours-report", meta=meta, stats=stats, sections=sections,
+                        empty_message="No attendance in this period.",
+                        notes=["Days with a missed time-out are flagged and excluded from hours until corrected."] if summary else (),
+                        footer_note="Ala Eh! attendance report")
     name = f"hours_{start_day.isoformat()}_{end_day.isoformat()}.pdf"
-    return Response(buf.getvalue(), mimetype="application/pdf",
-                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+    return Response(pdf, mimetype="application/pdf", headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@report_bp.get("/hours-summary.pdf")
+@require_roles("ADMIN", "OPERATOR")
+def hours_summary_pdf():
+    """A summary of the hours worked in the date range, for the Records page: per employee, per department and per day.
+    It follows ?from / ?to (default: today; at most 92 days), ?department and ?q (a name or employee ID contains).
+    Not a punch log: the clock-ins and outs themselves are in the Scan log tab and the CSV export."""
+    from app.services.pdf_report import Section, Stat, render_report
+
+    start_day, end_day = _range_args()
+    rows = _daily_rows(load_current_user(), start_day, end_day)
+    q = (request.args.get("q") or "").strip().lower()
+    if q:
+        rows = [r for r in rows if q in (r["user_name"] or "").lower() or q in (r["employee_code"] or "").lower()]
+    summary = _hours_summary(rows)
+
+    regular = sum(p["hours"] for p in summary)
+    overtime = sum(p["ot_hours"] for p in summary)
+    late_days = sum(p["late_days"] for p in summary)
+    missed_timeouts = sum(p["days_without_time_out"] for p in summary)
+    span = (end_day - start_day).days + 1
+    period = start_day.isoformat() if span == 1 else f"{start_day.isoformat()} to {end_day.isoformat()}"
+    meta = [f"period    {period}  ({span} day{'s' if span != 1 else ''})",
+            f"dept      {request.args['department']}" if request.args.get("department") else "dept      all departments"]
+    if q:
+        meta.append(f"search    {request.args['q'].strip()}")
+    meta.append(f"created   {now_in_org_tz().strftime('%Y-%m-%d %H:%M')}")
+
+    stats = [Stat("Employees", str(len(summary))), Stat("Total hours", _fmt_hours(regular + overtime), accent=True),
+             Stat("Regular", _fmt_hours(regular)), Stat("Overtime", _fmt_hours(overtime)), Stat("Late days", str(late_days)),
+             Stat("Missing time-outs", str(missed_timeouts))]
+
+    by_day: dict[str, float] = defaultdict(float)
+    for r in rows:
+        by_day[r["date"]] += r["total_hours"]
+    chart = None
+    if summary and 1 < span <= 62:
+        days = [start_day + timedelta(days=i) for i in range(span)]
+        chart = [(d.strftime("%m-%d"), round(by_day.get(d.isoformat(), 0.0), 2)) for d in days]
+
+    sections = []
+    departments: dict[str, dict] = {}
+    for p in summary:
+        d = departments.setdefault(p["department"] or "Unassigned", {"people": 0, "days": 0, "hours": 0.0, "ot": 0.0})
+        d["people"] += 1
+        d["days"] += p["days_worked"]
+        d["hours"] += p["hours"]
+        d["ot"] += p["ot_hours"]
+    if len(departments) > 1:
+        dept_rows = [[name, d["people"], d["days"], _fmt_hours(d["hours"]), _fmt_hours(d["ot"]), _fmt_hours(d["hours"] + d["ot"]),
+                      _fmt_hours((d["hours"] + d["ot"]) / d["people"])]
+                     for name, d in sorted(departments.items(), key=lambda kv: -(kv[1]["hours"] + kv[1]["ot"]))]
+        sections.append(Section("Hours by department", ["DEPARTMENT", "PEOPLE", "DAYS", "REGULAR", "OT", "TOTAL", "PER PERSON"], dept_rows,
+                                [46, 17, 16, 26, 22, 26, 27], align_right=(1, 2, 3, 4, 5, 6)))
+    if summary:
+        emp_rows = [[p["user_name"], p["employee_code"] or "", p["department"] or "", p["days_worked"], _fmt_hours(p["hours"]),
+                     _fmt_hours(p["ot_hours"]), _fmt_hours(p["total_hours"]), p["late_days"]] for p in summary]
+        emp_rows.append(["Total", "", "", "", _fmt_hours(regular), _fmt_hours(overtime), _fmt_hours(regular + overtime), late_days])
+        sections.append(Section("Hours by employee", ["EMPLOYEE", "ID", "DEPARTMENT", "DAYS", "REGULAR", "OT", "TOTAL", "LATE"], emp_rows,
+                                [42, 22, 31, 12, 22, 17, 22, 12], total_row=True, align_right=(3, 4, 5, 6, 7)))
+
+    pdf = render_report(title="Hours summary", slug="hours-summary", meta=meta, stats=stats if summary else (), sections=sections,
+                        empty_message="No hours were recorded in this period.", chart=chart, chart_title="Hours per day",
+                        notes=["Unpaid break time is not counted. A shift that is still open counts up to now.",
+                               "Days with a missed time-out are flagged and excluded from hours until corrected."] if summary else (),
+                        footer_note="Ala Eh! hours summary")
+    name = f"hours-summary_{start_day.isoformat()}_{end_day.isoformat()}.pdf"
+    return Response(pdf, mimetype="application/pdf", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @report_bp.get("/export.csv")
 @require_roles("ADMIN", "OPERATOR")
 def export_csv():
     caller = load_current_user()
-    events = filtered_events_query(caller).order_by(AttendanceEvent.timestamp.asc()).limit(50000).all()
+    start_day, end_day = parse_day(request.args.get("from")), parse_day(request.args.get("to"))
+    if start_day and end_day and (end_day - start_day).days > 91:
+        raise AppError("Date range is limited to 92 days.", 400)
+    query = filtered_events_query(caller).options(joinedload(AttendanceEvent.user)).order_by(AttendanceEvent.timestamp.asc())
+    total = query.order_by(None).count()
+    truncated = total > 50000
+    events = query.limit(50000).all()
     buf = io.StringIO()
     writer = csv.writer(buf)
     # "Work date" is the shift's day: a night shift's 06:00 time out
@@ -431,7 +503,8 @@ def export_csv():
     return Response(
         "﻿" + buf.getvalue(),  # BOM so Excel opens UTF-8 names correctly
         mimetype="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+        headers={"Content-Disposition": f'attachment; filename="{name}"',
+                 "X-Total-Count": str(total), "X-Export-Truncated": "true" if truncated else "false"},
     )
 
 

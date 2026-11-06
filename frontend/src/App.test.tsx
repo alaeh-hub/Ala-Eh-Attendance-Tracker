@@ -77,7 +77,7 @@ describe("route guards", () => {
 
   it("sends a signed-out visitor to the sign-in page", async () => {
     renderAt("/admin/review");
-    expect(await screen.findByText("Sign in to the Ala Eh! attendance system")).toBeInTheDocument();
+    expect(await screen.findByText("Secure access to Ala Eh! attendance.")).toBeInTheDocument();
   });
 
   it("restores the session from the refresh cookie without flashing the sign-in page", async () => {
@@ -87,7 +87,7 @@ describe("route guards", () => {
     refreshSession.mockReturnValue(new Promise((r) => (resolve = r)));
     renderAt("/records");
     expect(screen.getByText(/Loading/)).toBeInTheDocument();
-    expect(screen.queryByText("Sign in to the Ala Eh! attendance system")).not.toBeInTheDocument();
+    expect(screen.queryByText("Secure access to Ala Eh! attendance.")).not.toBeInTheDocument();
     resolve({ access_token: "t", user: maria, kiosk_locked: false });
     expect(await screen.findAllByText("My attendance")).not.toHaveLength(0);
   });
@@ -98,7 +98,7 @@ describe("route guards", () => {
     refreshSession.mockRejectedValue(new Error("Network Error"));
     renderAt("/kiosk");
     expect(await screen.findByText(/Can't reach the server/)).toBeInTheDocument();
-    expect(screen.queryByText("Sign in to the Ala Eh! attendance system")).not.toBeInTheDocument();
+    expect(screen.queryByText("Secure access to Ala Eh! attendance.")).not.toBeInTheDocument();
   });
 
   it("lets an admin open the review page", async () => {

@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
 from flask import Blueprint, jsonify, request
+from sqlalchemy.orm import joinedload
 
 from app.extensions import db, socketio
 from app.middleware.error_handler import AppError
@@ -64,7 +65,7 @@ def filtered_events_query(caller, apply_dates: bool = True):
     """Shared filters for the list endpoint, CSV export and reports. Reports
     pass apply_dates=False and window by work day themselves (a night
     shift's time out is on the next calendar day)."""
-    query = AttendanceEvent.query.join(User, User.id == AttendanceEvent.user_id)
+    query = AttendanceEvent.query.options(joinedload(AttendanceEvent.user)).join(User, User.id == AttendanceEvent.user_id)
     if caller.role == "STAFF":
         query = query.filter(AttendanceEvent.user_id == caller.id)
     elif request.args.get("user_id"):
@@ -94,6 +95,9 @@ def list_attendance():
     page through the newest-first list; X-Total-Count has the full count."""
     caller = load_current_user()
     limit, offset = parse_page_args(default_limit=50, max_limit=1000)
+    start_day, end_day = parse_day(request.args.get("from")), parse_day(request.args.get("to"))
+    if start_day and end_day and (end_day - start_day).days > 91:
+        raise AppError("Date range is limited to 92 days.", 400)
     query = filtered_events_query(caller)
     total = query.order_by(None).count()
     events = (query.order_by(AttendanceEvent.timestamp.desc(), AttendanceEvent.id.desc())

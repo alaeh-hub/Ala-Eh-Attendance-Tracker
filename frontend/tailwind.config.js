@@ -5,43 +5,30 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['"Plus Jakarta Sans"', "ui-sans-serif", "system-ui", "Segoe UI", "sans-serif"],
+        sans: ["var(--font-body)"],
+        display: ["var(--font-display)"],
       },
       colors: {
-        // Black surfaces
-        ink: {
-          950: "#070707",
-          900: "#0c0c0c",
-          850: "#111111",
-          800: "#161616",
-          750: "#1c1c1c",
-          700: "#232323",
-          600: "#2e2e2e",
-          500: "#3d3d3d",
-        },
+        // Warm black surfaces; values live in src/tokens.css as channel triplets.
+        ink: Object.fromEntries([950, 900, 850, 800, 750, 700, 600, 500].map((n) => [n, `rgb(var(--ch-ink-${n}) / <alpha-value>)`])),
         // Brand yellow, taken from the Ala Eh! logo
-        brand: {
-          50: "#fffbea",
-          100: "#fff3c4",
-          200: "#ffe88a",
-          300: "#ffdb4d",
-          400: "#fdd023",
-          500: "#f5c000",
-          600: "#d4a000",
-          700: "#a77a00",
-          800: "#7a5900",
-          900: "#4d3800",
-        },
+        brand: Object.fromEntries([50, 100, 200, 300, 400, 500, 600, 700, 800, 900].map((n) => [n, `rgb(var(--ch-brand-${n}) / <alpha-value>)`])),
+        white: "rgb(var(--ch-white) / <alpha-value>)",
+        black: "rgb(var(--ch-black) / <alpha-value>)",
       },
+      // One corner radius for every surface: the card radius. Controls use rounded-lg (the control radius).
+      borderRadius: { xl: "var(--radius-card)", "2xl": "var(--radius-card)", lg: "var(--radius-ctl)" },
       boxShadow: {
-        glow: "0 0 0 1px rgba(245,192,0,.25), 0 8px 40px -8px rgba(245,192,0,.35)",
-        card: "0 1px 0 0 rgba(255,255,255,.04) inset, 0 10px 30px -12px rgba(0,0,0,.8)",
+        // Kept as names so existing classes resolve; the redesign draws depth with hairlines, not glows.
+        glow: "none",
+        card: "none",
       },
       keyframes: {
         "fade-up": { from: { opacity: 0, transform: "translateY(8px)" }, to: { opacity: 1, transform: "none" } },
         "fade-in": { from: { opacity: 0 }, to: { opacity: 1 } },
         "scale-in": { from: { opacity: 0, transform: "scale(.94)" }, to: { opacity: 1, transform: "none" } },
-        scan: { "0%": { top: "10%" }, "50%": { top: "88%" }, "100%": { top: "10%" } },
+        // The scan element fills its frame and carries the line at its top edge, so translating it sweeps the line.
+        scan: { "0%": { transform: "translateY(10%)" }, "50%": { transform: "translateY(88%)" }, "100%": { transform: "translateY(10%)" } },
         "pulse-ring": { "0%": { transform: "scale(.92)", opacity: 0.7 }, "100%": { transform: "scale(1.3)", opacity: 0 } },
         "slide-in": { from: { opacity: 0, transform: "translateX(24px)" }, to: { opacity: 1, transform: "none" } },
         "draw-check": { from: { strokeDashoffset: 48 }, to: { strokeDashoffset: 0 } },

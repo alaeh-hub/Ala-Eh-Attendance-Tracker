@@ -32,6 +32,11 @@ const PATHS: Record<string, string> = {
   pause: "M10 4H6v16h4V4ZM18 4h-4v16h4V4Z",
   play: "M5 3l14 9-14 9V3Z",
   volume: "M11 5 6 9H2v6h4l5 4V5ZM19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07",
+  chevron_down: "M6 9l6 6 6-6",
+  chevron_up: "M18 15l-6-6-6 6",
+  chevron_left: "M15 18l-6-6 6-6",
+  chevron_right: "M9 18l6-6-6-6",
+  calendar: "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z",
   volume_off: "M11 5 6 9H2v6h4l5 4V5ZM23 9l-6 6M17 9l6 6",
 };
 

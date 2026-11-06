@@ -14,15 +14,22 @@ backend/instance/
 backend/logs/
 *.db
 *.sqlite3
+# SQLite's write-ahead log, journal and shared-memory files sit next to the database while it is open
+*.db-*
+*.sqlite3-*
 *.log
+npm-debug.log*
 
 # Python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .venv/
 .voice-venv/
 venv/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 
@@ -36,6 +43,7 @@ deploy/certs/*
 node_modules/
 frontend/dist/
 frontend/coverage/
+frontend/.vite/
 *.tsbuildinfo
 
 # Root-level stray lockfile (real one lives in frontend/)
@@ -44,9 +52,15 @@ frontend/coverage/
 # Generated end-to-end test pack
 /docs/E2E_TEST_PACK.pdf
 
-# Editors / OS
+# Design-tool run records and screenshots (.hallmark/): regenerated on every run, not source
+.hallmark/
+
+# Editors / OS / assistants
 .vs/
 .vscode/
 .idea/
+.claude/settings.local.json
+*.swp
 Thumbs.db
+desktop.ini
 .DS_Store

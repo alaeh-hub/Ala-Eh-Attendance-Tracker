@@ -1,6 +1,7 @@
 import { CSSProperties, ReactNode, RefObject } from "react";
 import Icon from "./Icon";
 import { Spinner } from "./ui";
+import { Select } from "./fields";
 
 export type CameraTone = "idle" | "scanning" | "success" | "warn" | "error";
 
@@ -70,16 +71,16 @@ export default function CameraView({
       {ready && (isInfrared || showPicker) && (
         <div className={`absolute z-10 flex items-center gap-2 ${toolsClass}`}>
           {isInfrared && (
-            <span className="rounded-full border border-sky-400/30 bg-black/70 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-sky-300 backdrop-blur" title="Using the infrared sensor for capture">
+            <span className="tag tag-plate tag-info" title="Using the infrared sensor for capture">
               IR
             </span>
           )}
           {showPicker && (
-            <select
+            <Select
               value={deviceId ?? ""}
               onChange={(e) => onSwitchCamera!(e.target.value)}
               aria-label="Choose camera"
-              className="rounded-full border border-white/10 bg-black/70 px-2.5 py-1 text-[11px] font-medium text-neutral-200 backdrop-blur"
+              className="rounded-full border border-white/10 bg-black/70 px-2.5 py-1 text-[11px] font-medium text-neutral-200"
               title="Choose camera"
             >
               {devices!.map((d, i) => (
@@ -87,7 +88,7 @@ export default function CameraView({
                   {d.label || `Camera ${i + 1}`}
                 </option>
               ))}
-            </select>
+            </Select>
           )}
         </div>
       )}
@@ -98,7 +99,7 @@ export default function CameraView({
           {/* Dims everything outside the face window; shares the window's own shape so the two always line up. */}
           {!fill && (
             <div
-              className={`absolute left-1/2 ${ovalClass} w-auto -translate-x-1/2 -translate-y-1/2 rounded-[50%] shadow-[0_0_0_9999px_rgba(0,0,0,.5)]`}
+              className={`absolute left-1/2 ${ovalClass} w-auto -translate-x-1/2 -translate-y-1/2 rounded-[50%]`}
               style={{ aspectRatio: "0.78", ...ovalStyle }}
             />
           )}
@@ -110,7 +111,9 @@ export default function CameraView({
           >
             {scanning && (
               <div className="absolute inset-0 overflow-hidden rounded-[50%]">
-                <div className="absolute left-0 right-0 h-[2px] animate-scan bg-gradient-to-r from-transparent via-brand-300 to-transparent shadow-[0_0_18px_4px_rgba(245,192,0,.55)]" />
+                <div className="absolute inset-0 animate-scan">
+                  <div className="h-[2px] bg-brand-300" />
+                </div>
               </div>
             )}
           </div>
@@ -120,14 +123,14 @@ export default function CameraView({
           ))}
           {guideLabel && (
             <div className="absolute inset-x-0 bottom-5 flex justify-center px-4">
-              <span key={guideLabel} className="rounded-full border border-white/10 bg-black/75 px-5 py-2 text-sm font-semibold text-white backdrop-blur animate-fade-up sm:text-base">{guideLabel}</span>
+              <span key={guideLabel} className="rounded-full border border-white/10 bg-black/75 px-5 py-2 text-sm font-semibold text-white animate-fade-up sm:text-base">{guideLabel}</span>
             </div>
           )}
         </div>
       )}
 
       {!ready && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-[radial-gradient(circle_at_50%_40%,rgba(245,192,0,.08),transparent_60%)]">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-ink-900">
           <span className="relative flex h-20 w-20 items-center justify-center">
             <span className="absolute inset-0 rounded-full bg-brand-500/20 animate-pulse-ring" />
             <span className="relative rounded-full border border-brand-500/40 bg-ink-850 p-5 text-brand-400">

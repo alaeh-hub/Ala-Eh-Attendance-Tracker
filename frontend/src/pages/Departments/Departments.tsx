@@ -4,6 +4,7 @@ import { ConfirmDialog, EmptyState, Field, Modal, PageHeader, Spinner } from "..
 import api, { errorMessage } from "../../services/api";
 import { toast } from "../../stores/toastStore";
 import type { Department, Shift } from "../../types";
+import { TimeField } from "../../components/fields";
 
 const EMPTY_FORM = {
   name: "",
@@ -55,7 +56,7 @@ function middleBreak(start: string, end: string): [string, string] {
 function NextDay({ start, end }: { start: string | null | undefined; end: string | null | undefined }) {
   if (!isOvernight(start, end)) return null;
   return (
-    <span className="ml-1 rounded bg-indigo-500/15 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-indigo-200" title="Ends the next day">
+    <span className="ml-1 rounded bg-indigo-500/15 px-1 py-px text-[10px] font-semibold text-indigo-200" title="Ends the next day">
       +1 day
     </span>
   );
@@ -116,7 +117,7 @@ export default function Departments() {
         }
       />
 
-      <div className="card overflow-hidden animate-fade-up" style={{ animationDelay: "80ms" }}>
+      <div className="panel overflow-hidden animate-fade-up" style={{ animationDelay: "80ms" }}>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[800px] table-fixed text-sm">
             <colgroup>
@@ -152,9 +153,9 @@ export default function Departments() {
                     </td>
                     <td className="table-cell">
                       {d.has_shifting ? (
-                        <div className="flex flex-wrap gap-1.5">
+                        <div className="flex flex-col gap-1">
                           {d.shifts.map((s) => (
-                            <span key={s.name} className="chip bg-sky-500/10 text-sky-300 ring-1 ring-sky-500/25">
+                            <span key={s.name} className="tag tag-info">
                               {s.name}: {s.start_time}–{s.end_time}
                               <NextDay start={s.start_time} end={s.end_time} />
                             </span>
@@ -169,9 +170,9 @@ export default function Departments() {
                     </td>
                     <td className="table-cell">
                       {d.roles.length ? (
-                        <div className="flex flex-wrap gap-1.5">
+                        <div className="flex flex-wrap gap-x-4 gap-y-1">
                           {d.roles.map((r) => (
-                            <span key={r} className="chip bg-white/[0.06] text-neutral-300 ring-1 ring-white/10">
+                            <span key={r} className="text-sm text-neutral-300">
                               {r}
                             </span>
                           ))}
@@ -422,10 +423,10 @@ function DepartmentForm({ department, onClose, onSaved }: { department: Departme
           {!form.has_shifting ? (
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
               <Field label="Start time">
-                <input className="input" type="time" value={form.start_time} onChange={(e) => setHours({ start_time: e.target.value })} />
+                <TimeField className="input" value={form.start_time} onChange={(e) => setHours({ start_time: e.target.value })} />
               </Field>
               <Field label="End time" hint={fixedOvernight ? "Ends the next day (overnight schedule)." : "An end at or before the start means an overnight schedule."}>
-                <input className="input" type="time" value={form.end_time} onChange={(e) => setHours({ end_time: e.target.value })} />
+                <TimeField className="input" value={form.end_time} onChange={(e) => setHours({ end_time: e.target.value })} />
               </Field>
               {fixedOvernight && (
                 <p className="rounded-xl bg-indigo-500/10 px-3 py-2 text-xs text-indigo-200 sm:col-span-2" role="status">
@@ -456,10 +457,10 @@ function DepartmentForm({ department, onClose, onSaved }: { department: Departme
                   <input className="input" value={shiftDraft.name} onChange={(e) => setShiftDraft((s) => ({ ...s, name: e.target.value }))} placeholder="Morning shift" />
                 </Field>
                 <Field label="Start">
-                  <input className="input" type="time" value={shiftDraft.start_time} onChange={(e) => setShiftDraft((s) => ({ ...s, start_time: e.target.value }))} />
+                  <TimeField className="input" value={shiftDraft.start_time} onChange={(e) => setShiftDraft((s) => ({ ...s, start_time: e.target.value }))} />
                 </Field>
                 <Field label="End">
-                  <input className="input" type="time" value={shiftDraft.end_time} onChange={(e) => setShiftDraft((s) => ({ ...s, end_time: e.target.value }))} />
+                  <TimeField className="input" value={shiftDraft.end_time} onChange={(e) => setShiftDraft((s) => ({ ...s, end_time: e.target.value }))} />
                 </Field>
                 <button type="button" className="btn-ghost h-[42px]" onClick={addShift}>
                   <Icon name="plus" className="h-4 w-4" /> Add
@@ -498,10 +499,10 @@ function DepartmentForm({ department, onClose, onSaved }: { department: Departme
           </p>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Break start">
-              <input className="input" type="time" value={form.break_start} onChange={(e) => setForm((f) => ({ ...f, break_start: e.target.value }))} />
+              <TimeField className="input" value={form.break_start} onChange={(e) => setForm((f) => ({ ...f, break_start: e.target.value }))} />
             </Field>
             <Field label="Break end">
-              <input className="input" type="time" value={form.break_end} onChange={(e) => setForm((f) => ({ ...f, break_end: e.target.value }))} />
+              <TimeField className="input" value={form.break_end} onChange={(e) => setForm((f) => ({ ...f, break_end: e.target.value }))} />
             </Field>
           </div>
           {breakIssue && (
@@ -515,7 +516,7 @@ function DepartmentForm({ department, onClose, onSaved }: { department: Departme
           {form.roles.length > 0 && (
             <div className="mb-2 flex flex-wrap gap-1.5">
               {form.roles.map((r) => (
-                <span key={r} className="chip bg-white/[0.06] text-neutral-300 ring-1 ring-white/10">
+                <span key={r} className="token">
                   {r}
                   <button type="button" onClick={() => removeRole(r)} className="ml-1 text-neutral-500 hover:text-red-300" aria-label={`Remove ${r}`}>
                     <Icon name="close" className="h-3 w-3" />

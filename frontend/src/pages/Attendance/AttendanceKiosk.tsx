@@ -452,7 +452,7 @@ export default function AttendanceKiosk() {
   const prompt = phase.kind === "prompt" ? phase.text : phase.kind === "idle" && ready && auto && online ? "Scanning… look at the camera" : undefined;
   // The controls step aside while a result is on screen.
   const showControls = phase.kind === "idle" || phase.kind === "prompt";
-  const glass = "border border-white/10 bg-black/55 backdrop-blur-md";
+  const glass = "border border-white/10 bg-black/55";
   const hudBtn = `${glass} flex h-12 min-w-12 items-center justify-center gap-2 rounded-full px-4 text-base font-semibold text-white transition-colors hover:bg-black/75 active:scale-95`;
   const DIRECTIONS = [
     { value: null, label: "Auto", on: "bg-brand-500 text-black" },
@@ -464,7 +464,7 @@ export default function AttendanceKiosk() {
     { value: "PM", label: "Afternoon" },
     { value: "OT", label: "Overtime" },
   ] as const;
-  const seg = "min-w-0 flex-1 truncate rounded-xl font-bold transition-all active:scale-95";
+  const seg = "min-w-0 flex-1 truncate rounded-xl font-bold transition-colors active:scale-95";
   const startBtn =
     "flex w-full items-center justify-center gap-3 rounded-2xl text-3xl font-extrabold transition-transform active:scale-[.97] h-24 sm:h-28 sm:text-4xl [@media(orientation:landscape)_and_(min-width:700px)]:h-full [@media(orientation:landscape)_and_(min-width:700px)]:flex-col [@media(orientation:landscape)_and_(min-width:700px)]:gap-2 [@media(max-height:520px)]:!h-full [@media(max-height:520px)]:!flex-row [@media(max-height:520px)]:!text-xl";
 
@@ -494,7 +494,7 @@ export default function AttendanceKiosk() {
             {/* Top bar: clock on the left, window controls on the right */}
             <div ref={topBarRef} className="absolute inset-x-0 top-0 flex items-start justify-between gap-3 px-[max(1rem,env(safe-area-inset-left))] pt-[max(1rem,env(safe-area-inset-top))] sm:px-6 sm:pt-6">
               <div className="flex min-w-0 items-center gap-3 sm:gap-4">
-                <img src="/logo.png" alt="Ala Eh! Food Products" className="h-12 w-12 shrink-0 rounded-full shadow-glow sm:h-16 sm:w-16 lg:h-20 lg:w-20 [@media(max-height:520px)]:!h-11 [@media(max-height:520px)]:!w-11" />
+                <img src="/logo.png" alt="Ala Eh! Food Products" className="h-12 w-12 shrink-0 rounded-full sm:h-16 sm:w-16 lg:h-20 lg:w-20 [@media(max-height:520px)]:!h-11 [@media(max-height:520px)]:!w-11" />
                 <LiveClock />
               </div>
               <div className="flex shrink-0 items-center gap-2">
@@ -528,13 +528,13 @@ export default function AttendanceKiosk() {
             )}
 
             {!online && (
-              <div role="alert" className="absolute inset-x-4 top-24 z-10 mx-auto flex max-w-xl items-center gap-2 rounded-xl border border-orange-400/50 bg-black/85 px-4 py-3 text-sm font-semibold text-orange-200 backdrop-blur sm:top-28">
+              <div role="alert" className="absolute inset-x-4 top-24 z-10 mx-auto flex max-w-xl items-center gap-2 rounded-xl border border-orange-400/50 bg-black/85 px-4 py-3 text-sm font-semibold text-orange-200 sm:top-28">
                 <Icon name="alert" className="h-4 w-4 shrink-0" /> No network connection. Scanning is paused until it is back.
               </div>
             )}
 
             {error && (
-              <div role="alert" className="absolute inset-x-4 top-36 mx-auto flex max-w-xl items-center gap-2 rounded-xl border border-red-500/40 bg-black/80 px-4 py-3 text-sm text-red-300 backdrop-blur">
+              <div role="alert" className="absolute inset-x-4 top-36 mx-auto flex max-w-xl items-center gap-2 rounded-xl border border-red-500/40 bg-black/80 px-4 py-3 text-sm text-red-300">
                 <Icon name="alert" className="h-4 w-4 shrink-0" /> {error}
               </div>
             )}
@@ -603,7 +603,7 @@ export default function AttendanceKiosk() {
                         <Icon name="pause" className="h-9 w-9 sm:h-11 sm:w-11 [@media(max-height:520px)]:!h-6 [@media(max-height:520px)]:!w-6" strokeWidth={2.2} /> Stop
                       </button>
                     ) : (
-                      <button onClick={startScan} disabled={!online} className={`${startBtn} disabled:cursor-not-allowed disabled:opacity-50 bg-brand-500 text-black shadow-[0_0_50px_-8px_rgba(245,192,0,.8)] hover:bg-brand-400`}>
+                      <button onClick={startScan} disabled={!online} className={`${startBtn} disabled:cursor-not-allowed disabled:opacity-50 bg-brand-500 text-black hover:bg-brand-400`}>
                         <Icon name="scan" className="h-9 w-9 sm:h-11 sm:w-11 [@media(max-height:520px)]:!h-6 [@media(max-height:520px)]:!w-6" strokeWidth={2.2} /> Start scan
                       </button>
                     ))}
@@ -617,7 +617,7 @@ export default function AttendanceKiosk() {
         }
       />
 
-      {idle && <IdleScreen hint="Step up to the camera or tap the screen" />}
+      {idle && <IdleScreen variant="kiosk" hint="Step up to the camera or tap the screen" />}
       {wakeShield && <div className="fixed inset-0 z-[99]" aria-hidden="true" />}
 
       <KioskUnlock
@@ -701,7 +701,7 @@ function SuccessOverlay({ phase }: { phase: Extract<Phase, { kind: "success" }> 
   const { event, note, reverifySeconds } = phase;
   const isIn = event.event_type === "CLOCK_IN";
   return (
-    <div className="absolute inset-0 flex overflow-y-auto bg-black/70 p-4 backdrop-blur-md animate-fade-in">
+    <div className="absolute inset-0 flex overflow-y-auto bg-black/70 p-4 animate-fade-in">
       <div className="m-auto flex w-full max-w-md flex-col items-center text-center animate-scale-in">
         <div className="relative mb-4 [@media(max-height:520px)]:mb-2">
           <span className="absolute -inset-3 rounded-full bg-emerald-500/25 animate-pulse-ring" />
@@ -712,7 +712,7 @@ function SuccessOverlay({ phase }: { phase: Extract<Phase, { kind: "success" }> 
             </svg>
           </span>
         </div>
-        <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-400">{isIn ? "Good day" : "See you"}</p>
+        <p className="text-sm font-semibold text-brand-400">{isIn ? "Good day" : "See you"}</p>
         <p className="mt-1 text-2xl font-extrabold tracking-tight text-white sm:text-3xl lg:text-4xl">{event.user_name}</p>
         {(event.employee_code || event.department) && (
           <p className="mt-1 text-sm text-neutral-400">{[event.employee_code, event.department].filter(Boolean).join(" · ")}</p>
@@ -741,7 +741,7 @@ function NoticeOverlay({ phase }: { phase: Extract<Phase, { kind: "notice" }> })
   const isError = phase.tone === "error";
   return (
     <div className="absolute inset-x-0 bottom-0 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] animate-fade-up">
-      <div className={`flex items-center gap-4 rounded-2xl border bg-black/80 p-4 backdrop-blur-md ${isError ? "border-red-500/40" : "border-orange-400/40"}`}>
+      <div className={`flex items-center gap-4 rounded-2xl border bg-black/80 p-4 ${isError ? "border-red-500/40" : "border-orange-400/40"}`}>
         {phase.userId ? (
           <Avatar userId={phase.userId} name={phase.name} hasPhoto={phase.hasPhoto} size="h-12 w-12" />
         ) : (

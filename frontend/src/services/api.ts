@@ -1,5 +1,6 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from "axios";
 import type { User } from "../types";
+import { useProcessStore } from "../stores/processStore";
 import { EXPIRED_EVENT, KIOSK_LOCKED_EVENT, SESSION_EVENT } from "./authEvents";
 
 /**
@@ -58,7 +59,48 @@ export function hasRefreshCookie(): boolean {
   return !!readCookie(CSRF_COOKIE);
 }
 
+declare module "axios" {
+  interface AxiosRequestConfig {
+    /** Text for the "working on it" dialog; `false` keeps a request out of it. Writes show one by default. */
+    process?: string | false;
+    _pid?: number;
+  }
+}
+
 export const api = axios.create({ baseURL: API_URL, withCredentials: true });
+
+// Requests that have their own on-screen feedback (the camera loops, session upkeep) never raise the dialog.
+const QUIET = /(^|\/)(recognition\/|enrollment\/(check|sample)$|auth\/(refresh|kiosk\/))/;
+const PROCESS_LABELS: [RegExp, string][] = [
+  [/(^|\/)auth\/login$/, "Signing you in"],
+  [/(^|\/)auth\/logout$/, "Signing you out"],
+  [/(^|\/)admin\/clear-all-data$/, "Clearing data"],
+];
+function processLabel(method: string | undefined, url: string): string | null {
+  const m = (method ?? "get").toLowerCase();
+  if (m === "get") return null;
+  if (QUIET.test(url)) return null;
+  const named = PROCESS_LABELS.find(([re]) => re.test(url));
+  if (named) return named[1];
+  return m === "delete" ? "Deleting" : m === "post" ? "Saving" : "Saving changes";
+}
+
+api.interceptors.request.use((config) => {
+  const label = config.process === false ? null : typeof config.process === "string" ? config.process : processLabel(config.method, path(config.url));
+  if (label) config._pid = useProcessStore.getState().start(label);
+  return config;
+});
+// Registered before the refresh-and-retry handler below, so every request that starts a process also ends it.
+api.interceptors.response.use(
+  (res) => {
+    useProcessStore.getState().end(res.config._pid);
+    return res;
+  },
+  (error: AxiosError) => {
+    useProcessStore.getState().end(error.config?._pid);
+    return Promise.reject(error);
+  }
+);
 
 type RetryConfig = InternalAxiosRequestConfig & { _retried?: boolean };
 
@@ -172,8 +214,8 @@ export function errorMessage(err: unknown, fallback = "Something went wrong."): 
   return e.response.data?.error || fallback;
 }
 
-export async function downloadFile(url: string, params: Record<string, string | undefined>, fallbackName: string) {
-  const res = await api.get(url, { params, responseType: "blob" });
+export async function downloadFile(url: string, params: Record<string, string | undefined>, fallbackName: string, label = "Preparing your download") {
+  const res = await api.get(url, { params, responseType: "blob", process: label });
   const disposition = res.headers["content-disposition"] as string | undefined;
   const name = disposition?.match(/filename="?([^"]+)"?/)?.[1] || fallbackName;
   const href = URL.createObjectURL(res.data);

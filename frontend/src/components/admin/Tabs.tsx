@@ -34,7 +34,7 @@ export default function Tabs<K extends string>({
   }
 
   return (
-    <div role="tablist" aria-label={label} className={`mb-4 flex gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-1 sm:w-fit animate-fade-up ${className}`}>
+    <div role="tablist" aria-label={label} className={`mb-4 flex gap-6 border-b border-ink-700 sm:w-fit animate-fade-up ${className}`}>
       {tabs.map((t, i) => {
         const selected = t.key === value;
         return (
@@ -49,7 +49,7 @@ export default function Tabs<K extends string>({
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(t.key)}
             onKeyDown={(e) => onKeyDown(e, i)}
-            className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold transition-all sm:flex-none ${selected ? "bg-brand-500 text-black" : "text-neutral-400 hover:text-white"}`}
+            className={`-mb-px flex-1 border-b-2 px-1 py-2.5 text-sm font-semibold transition-colors sm:flex-none ${selected ? "border-brand-500 text-brand-400" : "border-transparent text-neutral-400 hover:text-white"}`}
           >
             {t.label}
           </button>

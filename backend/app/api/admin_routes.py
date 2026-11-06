@@ -11,12 +11,14 @@ from app.services.auth_service import verify_user_password
 from app.services.embedding_index import embedding_index
 from app.utils.audit import log_action
 from app.utils.auth import KIOSK_ROLE, load_current_user, require_roles
+from app.utils.ratelimit import rate_limit, user_key
 
 admin_bp = Blueprint("admin", __name__)
 
 
 @admin_bp.post("/clear-all-data")
 @require_roles("ADMIN")
+@rate_limit("clear-all-data", limit=5, per=60, key=user_key)
 def clear_all_data():
     """
     Factory-reset the company data. Deletes every face sample and profile
