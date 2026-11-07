@@ -16,12 +16,15 @@ interface ToastState {
 
 let nextId = 1;
 
+/** How long a toast stays, per tone. The toaster draws its timer bar from the same numbers. */
+export const toastMs = (tone: ToastTone) => (tone === "error" ? 6000 : 3800);
+
 export const useToastStore = create<ToastState>((set, get) => ({
   toasts: [],
   push: (tone, title, message) => {
     const id = nextId++;
     set({ toasts: [...get().toasts, { id, tone, title, message }].slice(-4) });
-    setTimeout(() => get().dismiss(id), tone === "error" ? 6000 : 3800);
+    setTimeout(() => get().dismiss(id), toastMs(tone));
   },
   dismiss: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
 }));

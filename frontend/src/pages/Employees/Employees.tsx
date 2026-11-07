@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import Pager from "../../components/admin/Pager";
 import { AnyRole, ROLE_HELP } from "../../components/admin/roles";
@@ -9,7 +9,9 @@ import api, { errorMessage } from "../../services/api";
 import { useAuthStore } from "../../stores/authStore";
 import { toast } from "../../stores/toastStore";
 import type { Department, User } from "../../types";
-import { smartMatch } from "../../utils/search";
+import Highlight from "../../components/Highlight";
+import SearchInput from "../../components/SearchInput";
+import { smartFilter } from "../../utils/search";
 import { Select } from "../../components/fields";
 
 type StatusFilter = "all" | "active" | "inactive" | "not_enrolled";
@@ -42,15 +44,18 @@ export default function Employees() {
 
   const departments = useMemo(() => [...new Set(users.map((u) => u.department).filter(Boolean) as string[])].sort(), [users]);
 
+  // The list reacts to the deferred text so typing never waits on filtering; results are ranked best match first.
+  const q = useDeferredValue(search);
   const filtered = useMemo(() => {
-    return users.filter((u) => {
+    const pool = users.filter((u) => {
       if (department && u.department !== department) return false;
       if (status === "active" && !u.is_active) return false;
       if (status === "inactive" && u.is_active) return false;
       if (status === "not_enrolled" && (u.enrolled || u.role === "KIOSK")) return false;
-      return smartMatch(search, [u.full_name, u.email, u.employee_code, u.department, u.position]);
+      return true;
     });
-  }, [users, search, department, status]);
+    return smartFilter(pool, q, (u) => [u.full_name, u.employee_code, u.email, u.department, u.position], { rank: true });
+  }, [users, q, department, status]);
 
   // Paging restarts at the first page whenever the filters change.
   const filterKey = JSON.stringify([search, department, status]);
@@ -141,10 +146,7 @@ export default function Employees() {
       />
 
       <div className="bar mb-4 flex flex-col gap-3 sm:flex-row sm:items-center animate-fade-up">
-        <div className="relative flex-1">
-          <Icon name="search" className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
-          <input className="input pl-10" placeholder="Search name, ID, email, position…" aria-label="Search employees" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
+        <SearchInput className="flex-1" placeholder="Search name, ID, email, position…" aria-label="Search employees" value={search} onValueChange={setSearch} note={`${filtered.length} of ${users.length}`} />
         <Select className="input sm:w-48" value={department} onChange={(e) => setDepartment(e.target.value)} aria-label="Department">
           <option value="">All departments</option>
           {departments.map((d) => (
@@ -161,7 +163,7 @@ export default function Employees() {
 
       <div className="panel overflow-hidden animate-fade-up" style={{ animationDelay: "80ms" }}>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[950px] table-fixed text-sm">
+          <table className="rtable w-full min-w-[950px] table-fixed text-sm">
             <colgroup>
               <col className="w-[270px]" />
               <col className="w-[120px]" />
@@ -192,27 +194,27 @@ export default function Employees() {
               {!loading &&
                 visible.map((u) => (
                   <tr key={u.id} className={`transition-colors hover:bg-white/[0.02] ${u.is_active ? "" : "opacity-60"}`}>
-                    <td className="table-cell">
+                    <td className="table-cell cell-primary">
                       <div className="flex items-center gap-3">
                         <Avatar userId={u.id} name={u.full_name} hasPhoto={u.has_photo} size="h-10 w-10" />
                         <div className="min-w-0">
                           <p className="truncate font-semibold text-white">
-                            {u.full_name} {u.id === me?.id && <span className="text-xs font-normal text-neutral-500">(you)</span>}
+                            <Highlight text={u.full_name} query={q} /> {u.id === me?.id && <span className="text-xs font-normal text-neutral-500">(you)</span>}
                           </p>
                           <p className="truncate text-xs text-neutral-500">
-                            <span className="font-mono text-neutral-400">{u.employee_code || "—"}</span> · {u.email}
+                            <span className="font-mono text-neutral-400">{u.employee_code ? <Highlight text={u.employee_code} query={q} /> : "—"}</span> · {u.email}
                           </p>
                         </div>
                       </div>
                     </td>
-                    <td className="table-cell">
-                      <p className="truncate text-neutral-200">{u.department || "—"}</p>
+                    <td data-label="Department" className="table-cell">
+                      <p className="truncate text-neutral-200">{u.department ? <Highlight text={u.department} query={q} /> : "—"}</p>
                       <p className="truncate text-xs text-neutral-500">{u.position || ""}</p>
                     </td>
-                    <td className="table-cell">
+                    <td data-label="Role" className="table-cell">
                       <RoleBadge role={u.role} />
                     </td>
-                    <td className="table-cell">
+                    <td data-label="Face" className="table-cell">
                       {u.role === "KIOSK" ? (
                         <span className="tag tag-muted" title="Kiosk device accounts don't have a face.">
                           Device account
@@ -227,12 +229,12 @@ export default function Employees() {
                         </Link>
                       )}
                     </td>
-                    <td className="table-cell">
+                    <td data-label="Status" className="table-cell">
                       <span className={`tag ${u.is_active ? "tag-ok" : "tag-muted"}`}>
                         {u.is_active ? "Active" : "Deactivated"}
                       </span>
                     </td>
-                    <td className="table-cell">
+                    <td className="table-cell cell-actions">
                       <div className="flex justify-end gap-1">
                         {u.role !== "KIOSK" && (
                           <Link

@@ -21,7 +21,10 @@ import {
 import { createPortal } from "react-dom";
 import { cn } from "../lib/utils";
 import { orgDate } from "../utils/orgTime";
+import { smartFilter } from "../utils/search";
+import Highlight from "./Highlight";
 import Icon from "./Icon";
+import SearchInput from "./SearchInput";
 
 /*
  * Custom dropdown, date, time and date-time controls, in place of the browser's own. Each one keeps a real, visually hidden
@@ -116,6 +119,9 @@ function parseOptions(children: ReactNode): Opt[] {
   return out;
 }
 
+/** From this many options a dropdown gets a search box. */
+const SEARCHABLE_FROM = 8;
+
 const triggerBase = "input flex items-center justify-between gap-2 text-left disabled:cursor-not-allowed disabled:opacity-50";
 
 export function Select({ className, children, value, onChange, disabled, required, name, id, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
@@ -131,23 +137,35 @@ export function Select({ className, children, value, onChange, disabled, require
   const listId = useId();
   const { wrapper, trigger: triggerCls } = splitClasses(className);
   const close = useCallback(() => setOpen(false), []);
-  const style = usePopover(open, close, wrap, list);
+  // Long lists get a search box (smart search: words, accents, typos, best match first).
+  const searchable = options.length >= SEARCHABLE_FROM;
+  const [query, setQuery] = useState("");
+  const popRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const visible = useMemo(() => (searchable && query.trim() ? smartFilter(options, query, (o) => [o.text], { rank: true }) : options), [options, query, searchable]);
+  const style = usePopover(open, close, wrap, searchable ? popRef : list);
 
   const show = () => {
     if (disabled) return;
+    setQuery("");
     const i = options.findIndex((o) => o.value === current && !o.disabled);
     setActive(i >= 0 ? i : Math.max(0, options.findIndex((o) => !o.disabled)));
     setOpen(true);
   };
   useEffect(() => {
-    if (open) requestAnimationFrame(() => list.current?.focus({ preventScroll: true }));
-  }, [open]);
+    if (open) requestAnimationFrame(() => (searchable ? searchRef : list).current?.focus({ preventScroll: true }));
+  }, [open, searchable]);
+  useEffect(() => {
+    // A new search starts on its best match.
+    if (open && searchable) setActive(Math.max(0, visible.findIndex((o) => !o.disabled)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
   useEffect(() => {
     if (open) list.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
   }, [open, active]);
 
   const pick = (i: number) => {
-    const o = options[i];
+    const o = visible[i];
     if (!o || o.disabled) return;
     onChange?.(fakeChange<HTMLSelectElement>(o.value, name));
     setOpen(false);
@@ -155,9 +173,9 @@ export function Select({ className, children, value, onChange, disabled, require
   };
   const step = (dir: 1 | -1, from = active) => {
     let i = from;
-    for (let n = 0; n < options.length; n++) {
-      i = (i + dir + options.length) % options.length;
-      if (!options[i].disabled) return i;
+    for (let n = 0; n < visible.length; n++) {
+      i = (i + dir + visible.length) % visible.length;
+      if (!visible[i].disabled) return i;
     }
     return from;
   };
@@ -179,17 +197,36 @@ export function Select({ className, children, value, onChange, disabled, require
       trigger.current?.focus();
     } else if (e.key === "ArrowDown") (stop(), setActive((a) => step(1, a)));
     else if (e.key === "ArrowUp") (stop(), setActive((a) => step(-1, a)));
-    else if (e.key === "Home") (stop(), setActive(options.findIndex((o) => !o.disabled)));
-    else if (e.key === "End") (stop(), setActive(options.length - 1 - [...options].reverse().findIndex((o) => !o.disabled)));
-    else if (e.key === "Enter" || e.key === " ") (stop(), pick(active));
+    // In the search box Home, End and Space belong to the text, so only the list-only keys are claimed there.
+    else if (e.key === "Home" && !searchable) (stop(), setActive(visible.findIndex((o) => !o.disabled)));
+    else if (e.key === "End" && !searchable) (stop(), setActive(visible.length - 1 - [...visible].reverse().findIndex((o) => !o.disabled)));
+    else if (e.key === "Enter" || (e.key === " " && !searchable)) (stop(), pick(active));
     else if (e.key === "Tab") setOpen(false);
-    else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+    else if (!searchable && e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
       const now = Date.now();
       typed.current = { text: (now - typed.current.at < 700 ? typed.current.text : "") + e.key.toLowerCase(), at: now };
-      const hit = options.findIndex((o) => !o.disabled && o.text.toLowerCase().startsWith(typed.current.text));
+      const hit = visible.findIndex((o) => !o.disabled && o.text.toLowerCase().startsWith(typed.current.text));
       if (hit >= 0) setActive(hit);
     }
   };
+
+  const renderOptions = () =>
+    visible.map((o, i) => (
+      <li
+        key={`${o.value}-${i}`}
+        id={`${listId}-${i}`}
+        role="option"
+        aria-selected={o.value === current}
+        aria-disabled={o.disabled || undefined}
+        data-active={i === active}
+        onPointerEnter={() => !o.disabled && setActive(i)}
+        onClick={() => pick(i)}
+        className={cn("pop-item", o.value === current && "is-selected", i === active && "is-active", o.disabled && "is-disabled")}
+      >
+        <span className="truncate">{searchable && query.trim() ? <Highlight text={o.text} query={query} /> : o.label}</span>
+        {o.value === current && <Icon name="check" className="h-4 w-4 shrink-0" />}
+      </li>
+    ));
 
   return (
     <div ref={wrap} className={cn("relative", wrapper || "w-full")}>
@@ -226,33 +263,46 @@ export function Select({ className, children, value, onChange, disabled, require
       </button>
       {open &&
         createPortal(
-          <ul
-            ref={list}
-            id={listId}
-            role="listbox"
-            tabIndex={-1}
-            aria-activedescendant={`${listId}-${active}`}
-            onKeyDown={onListKey}
-            style={style}
-            className="pop max-h-64 overflow-y-auto py-1 outline-none"
-          >
-            {options.map((o, i) => (
-              <li
-                key={`${o.value}-${i}`}
-                id={`${listId}-${i}`}
-                role="option"
-                aria-selected={o.value === current}
-                aria-disabled={o.disabled || undefined}
-                data-active={i === active}
-                onPointerEnter={() => !o.disabled && setActive(i)}
-                onClick={() => pick(i)}
-                className={cn("pop-item", o.value === current && "is-selected", i === active && "is-active", o.disabled && "is-disabled")}
-              >
-                <span className="truncate">{o.label}</span>
-                {o.value === current && <Icon name="check" className="h-4 w-4 shrink-0" />}
-              </li>
-            ))}
-          </ul>,
+          searchable ? (
+            <div ref={popRef} style={{ ...style, overflow: "hidden" }} onKeyDown={onListKey} className="pop flex w-72 max-w-[calc(100vw-16px)] flex-col">
+              <div className="border-b border-ink-700 p-2">
+                <SearchInput
+                  ref={searchRef}
+                  value={query}
+                  onValueChange={setQuery}
+                  placeholder="Search…"
+                  aria-label="Search options"
+                  role="combobox"
+                  aria-expanded
+                  aria-controls={listId}
+                  aria-autocomplete="list"
+                  aria-activedescendant={visible[active] ? `${listId}-${active}` : undefined}
+                  inputClassName="py-1.5"
+                />
+              </div>
+              <ul ref={list} id={listId} role="listbox" className="max-h-56 overflow-y-auto overscroll-contain py-1 outline-none">
+                {renderOptions()}
+                {visible.length === 0 && (
+                  <li className="px-3 py-3 text-center text-sm text-neutral-500" role="presentation">
+                    No matches
+                  </li>
+                )}
+              </ul>
+            </div>
+          ) : (
+            <ul
+              ref={list}
+              id={listId}
+              role="listbox"
+              tabIndex={-1}
+              aria-activedescendant={`${listId}-${active}`}
+              onKeyDown={onListKey}
+              style={style}
+              className="pop max-h-64 overflow-y-auto py-1 outline-none"
+            >
+              {renderOptions()}
+            </ul>
+          ),
           document.body
         )}
     </div>
@@ -545,7 +595,7 @@ export function DateTimeField(props: NativeProps) {
     <PickerShell {...props} kind="datetime-local" icon="calendar" display={display} closeOn="never" placeholder="Select date and time">
       {({ set, close }) => (
         <div>
-          <div className="flex gap-4">
+          <div className="flex flex-wrap gap-4">
             <Calendar value={date} min={props.min as string | undefined} max={props.max as string | undefined} onPick={(d) => set(`${d}T${time || "00:00"}`)} />
             <TimePanel value={time} onChange={(t) => set(`${date || orgDate()}T${t}`)} />
           </div>

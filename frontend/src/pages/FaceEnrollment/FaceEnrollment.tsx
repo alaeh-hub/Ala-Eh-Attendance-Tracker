@@ -6,6 +6,9 @@ import { ROLE_HELP } from "../../components/admin/roles";
 import CameraView, { CameraTone } from "../../components/CameraView";
 import FaceDebugOverlay from "../../components/FaceDebugOverlay";
 import Icon from "../../components/Icon";
+import Highlight from "../../components/Highlight";
+import SearchInput from "../../components/SearchInput";
+import { smartRank } from "../../utils/search";
 import { Avatar, ConfirmDialog, Field, PageHeader, RoleBadge, Spinner, forgetPhoto } from "../../components/ui";
 import { useCamera } from "../../hooks/useCamera";
 import { SHORT_SCREEN, useOvalFit } from "../../hooks/useOvalFit";
@@ -163,7 +166,8 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
   // Server-side search: never download the whole employee list.
   const { users, total, loading: loadingUsers, error: usersError } = useUserSearch(search, { status: "active", limit: 30, enabled: mode === "existing" });
   // Kiosk device accounts are tablets, not people: nothing to enroll.
-  const people = users.filter((u) => u.role !== "KIOSK");
+  // The server already filtered; this only puts the best match on top (same engine as the server).
+  const people = smartRank(users.filter((u) => u.role !== "KIOSK"), search, (u) => [u.full_name, u.employee_code, u.email, u.department, u.position]);
 
   useEffect(() => {
     api.get<Department[]>("/departments").then((r) => setDepartments(r.data)).catch(() => undefined);
@@ -244,7 +248,7 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
       </div>
 
       {mode === "new" ? (
-        <form onSubmit={submit} className="p-6" noValidate>
+        <form onSubmit={submit} className="p-4 sm:p-6" noValidate>
           <h3 className="mb-1 text-sm font-bold text-brand-400">Personal information</h3>
           <p className="mb-5 text-sm text-neutral-500">Fields marked * are required.</p>
           <div className="grid gap-5 sm:grid-cols-2">
@@ -345,18 +349,16 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
           </div>
         </form>
       ) : (
-        <div className="p-6">
-          <div className="relative mb-4">
-            <Icon name="search" className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
-            <input
-              className="input pl-10"
-              placeholder="Search by name, ID, email or department…"
-              aria-label="Search employees"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              autoFocus
-            />
-          </div>
+        <div className="p-4 sm:p-6">
+          <SearchInput
+            className="mb-4"
+            placeholder="Search by name, ID, email or department…"
+            aria-label="Search employees"
+            value={search}
+            onValueChange={setSearch}
+            autoFocus
+            trailing={loadingUsers ? <Spinner className="mr-1 h-4 w-4 text-brand-400" /> : undefined}
+          />
           <div className="max-h-[440px] space-y-1 overflow-y-auto" aria-busy={loadingUsers}>
             {loadingUsers && people.length === 0 && Array.from({ length: 4 }).map((_, i) => <div key={i} className="skeleton h-16 w-full rounded-xl" />)}
             {!loadingUsers && people.length === 0 && (
@@ -371,8 +373,8 @@ function EmployeeStep({ onReady }: { onReady: (u: User) => void }) {
               >
                 <Avatar userId={u.id} name={u.full_name} hasPhoto={u.has_photo} size="h-11 w-11" />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-semibold text-white">{u.full_name}</p>
-                  <p className="truncate text-xs text-neutral-500">{[u.employee_code, u.department, u.position].filter(Boolean).join(" · ") || u.email}</p>
+                  <p className="truncate font-semibold text-white"><Highlight text={u.full_name} query={search} /></p>
+                  <p className="truncate text-xs text-neutral-500"><Highlight text={[u.employee_code, u.department, u.position].filter(Boolean).join(" · ") || u.email} query={search} /></p>
                 </div>
                 {u.enrolled ? (
                   <span className="tag tag-ok">{u.sample_count} samples</span>
@@ -1013,7 +1015,7 @@ function KioskPanel({ children, tone }: { children: React.ReactNode; tone: "succ
   const border = { success: "border-emerald-400/40", info: "border-brand-500/40", warn: "border-orange-400/40", error: "border-red-500/40" }[tone];
   return (
     <div className="absolute inset-0 z-10 flex overflow-y-auto bg-black/75 p-4 animate-fade-in">
-      <div className={`m-auto w-full max-w-md rounded-3xl border bg-black/60 p-6 text-center animate-scale-in sm:p-8 ${border}`}>{children}</div>
+      <div className={`m-auto w-full max-w-md rounded-3xl border bg-black/60 p-5 text-center animate-scale-in sm:p-8 ${border}`}>{children}</div>
     </div>
   );
 }
@@ -1034,7 +1036,7 @@ function DoneStep({ employee, onAnother }: { employee: User; onAnother: () => vo
   ];
   return (
     <div className="panel mx-auto max-w-xl overflow-hidden animate-scale-in">
-      <div className="relative flex flex-col items-center border-b border-ink-700 px-6 pb-6 pt-10 text-center">
+      <div className="relative flex flex-col items-center border-b border-ink-700 px-4 pb-5 pt-8 text-center sm:px-6 sm:pb-6 sm:pt-10">
         <div className="relative">
           <span className="absolute -inset-3 rounded-full bg-emerald-500/20 animate-pulse-ring" />
           <Avatar userId={employee.id} name={employee.full_name} hasPhoto={employee.has_photo} size="h-28 w-28" text="text-3xl" ring version={1} />
@@ -1045,7 +1047,7 @@ function DoneStep({ employee, onAnother }: { employee: User; onAnother: () => vo
         <h2 className="mt-5 text-2xl font-extrabold text-white">{employee.full_name} is enrolled</h2>
         <p className="mt-1 text-sm text-neutral-400">They can now clock in and out at any kiosk.</p>
       </div>
-      <dl className="divide-y divide-white/[0.05] px-6">
+      <dl className="divide-y divide-white/[0.05] px-4 sm:px-6">
         {rows.map(([k, v]) => (
           <div key={k} className="flex justify-between py-3 text-sm">
             <dt className="text-neutral-500">{k}</dt>
@@ -1053,7 +1055,7 @@ function DoneStep({ employee, onAnother }: { employee: User; onAnother: () => vo
           </div>
         ))}
       </dl>
-      <div className="flex flex-wrap gap-2 border-t border-white/[0.06] p-6">
+      <div className="flex flex-wrap gap-2 border-t border-white/[0.06] p-4 sm:p-6">
         <button className="btn-primary flex-1" onClick={onAnother}>
           <Icon name="plus" className="h-4 w-4" /> Enroll another
         </button>

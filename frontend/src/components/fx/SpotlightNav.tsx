@@ -69,7 +69,7 @@ export function SpotlightNav({ items, className }: { items: SpotlightItem[]; cla
       {items.map((item) => (
         <NavLink key={item.to} to={item.to} end={item.end} title={item.label} className="spot-nav-item">
           <Icon name={item.icon} className="h-[18px] w-[18px] shrink-0" />
-          <span className="hidden xl:inline">{item.label}</span>
+          <span className="spot-label">{item.label}</span>
           {!!item.badge && item.badge > 0 && (
             <span className="absolute -right-1 top-3.5 min-w-[1.1rem] rounded-full bg-red-500 px-1 text-center text-[10px] font-bold leading-[1.1rem] tabular-nums text-white">{item.badge > 99 ? "99+" : item.badge}</span>
           )}

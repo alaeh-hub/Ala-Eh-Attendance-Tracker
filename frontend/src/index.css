@@ -249,7 +249,7 @@ body::before {
 
 /* Section rule used above page titles: ┌─ name ───── */
 .section-rule { overflow: hidden; white-space: nowrap; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-ink-2); }
-.section-rule::after { content: " ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────"; color: var(--color-muted); }
+.section-rule::after { content: " ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────"; color: var(--color-muted); }
 /* Every button speaks the same mono voice as the inputs and labels. */
 button { font-family: var(--font-mono); }
 
@@ -349,3 +349,143 @@ tbody > tr { transition: background-color var(--dur-micro) var(--ease-out); }
 .idle-screen { background: var(--color-paper); transition: filter 4s var(--ease-out); }
 .idle-mono { font-family: var(--font-mono); }
 .idle-colon { margin-inline: 0.04em; animation: cursor-blink 1.6s steps(1) infinite; }
+
+/* =====================================================================
+   Mobile layer
+   Everything below only changes behaviour on narrow or touch screens.
+   ===================================================================== */
+
+/* Touch: no 300ms delay or double-tap zoom on controls, a calm tap flash, no scroll chaining out of overlays. */
+button, a, summary, [role="tab"], [role="menuitem"], select, label { touch-action: manipulation; }
+html { -webkit-tap-highlight-color: transparent; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+/* Hover is a pointer idea. On touch it sticks after a tap, so lift and spotlight effects stay off. */
+@media (hover: none) {
+  .btn-primary:hover:not(:disabled) { transform: none; }
+  .spot-card:hover::before { opacity: 0; }
+  tbody > tr:hover { background-color: transparent; }
+}
+
+/* Popovers (dropdown, calendar, time) may never outgrow the screen. */
+.pop { max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; overscroll-behavior: contain; }
+
+/* ---------- Stacked table: .rtable ----------
+   Below 1024px (phones and tablets) a table stops being a grid of columns and becomes a list of cards:
+   two columns under 640px, four from 640px. Laptops and desktops keep the real table.
+   Each <td> carries data-label="Column name"; add .cell-full to a cell that should span the row,
+   .cell-primary for the card's headline cell (no label, bigger), .cell-actions for the button row. */
+@media (max-width: 1023.98px) {
+  .rtable { min-width: 0 !important; width: 100% !important; table-layout: auto !important; }
+  .rtable colgroup, .rtable thead { display: none; }
+  .rtable, .rtable tbody { display: block; width: 100%; }
+  .rtable tbody > tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-xs) var(--space-md);
+    padding: var(--space-md) 0;
+    border-bottom: 1px solid var(--color-rule);
+  }
+  .rtable tbody > tr:last-child { border-bottom: 0; }
+  .rtable .table-cell { display: block; min-width: 0; padding: 0; text-align: left; }
+  .rtable .table-cell[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+  }
+  .rtable .cell-full, .rtable .cell-primary, .rtable .cell-actions { grid-column: 1 / -1; }
+  .rtable .cell-wrap { white-space: normal !important; }
+  .rtable .cell-primary { order: -1; }
+  .rtable .cell-primary::before { display: none; }
+  .rtable .cell-actions { padding-top: var(--space-xs); border-top: 1px dashed var(--color-rule); }
+  .rtable .cell-actions { order: 99; }
+  .rtable .cell-actions::before { display: none; }
+  .rtable .cell-actions > div { justify-content: flex-start; flex-wrap: wrap; }
+  /* Long unbroken values (emails, audit details) wrap instead of being clipped. */
+  .rtable .cell-wrap { max-width: none !important; white-space: normal !important; overflow: visible !important; text-overflow: clip !important; overflow-wrap: anywhere; }
+}
+
+/* ---------- Touch targets (WCAG 2.5.8 asks for 24px, Apple/Google ask for 44/48px) ---------- */
+@media (pointer: coarse) {
+  .btn { min-height: 44px; }
+  .input, .ascii-input { min-height: 44px; }
+  .cal-nav { height: 40px; width: 40px; }
+  .cal-day { height: 40px; width: 40px; }
+  .time-item { padding-block: 10px; }
+  .menu-item { min-height: 44px; }
+  .spot-nav-item { min-height: 44px; }
+  /* Icon-only buttons inside tables, lists and cards get a 40px hit area without changing how they look. */
+  .rtable .table-cell button, .rtable .table-cell a[aria-label] { min-height: 40px; min-width: 40px; display: inline-flex; align-items: center; justify-content: center; }
+  [role="tab"] { min-height: 44px; }
+  .pop-item { min-height: 40px; }
+}
+
+/* iOS Safari zooms the page when a focused field is under 16px, so real fields stay at 16px there. */
+@supports (-webkit-touch-callout: none) {
+  @media (max-width: 639.98px) {
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea, .input, .ascii-input { font-size: 16px; }
+  }
+}
+
+/* ---------- Page chrome on phones ---------- */
+.topbar { padding-top: env(safe-area-inset-top); }
+@media (max-width: 639.98px) {
+  .page-actions { width: 100%; }
+  .page-actions > .btn-primary, .page-actions > .btn-ghost, .page-actions > .btn-danger, .page-actions > a { flex: 1 1 auto; }
+  .page-actions > div { display: flex; flex: 1 1 100%; flex-wrap: wrap; gap: var(--space-xs); }
+  .page-actions > div > * { flex: 1 1 auto; }
+  .section-rule { font-size: var(--text-xs); }
+  .kl { font-size: 1.9rem; }
+  .process-panel { padding: var(--space-md); }
+  .process-glyph { font-size: 1.75rem; }
+  .time-col { height: 168px; }
+}
+
+/* Short landscape phones: keep the dialogs and the drawer inside the visible height. */
+@media (max-height: 480px) {
+  .pop { max-height: calc(100dvh - 12px); }
+}
+
+/* ---------- Press and state feedback ---------- */
+/* Icon-only buttons (the ones labelled with aria-label) squash slightly under the finger and spring back. */
+button[aria-label]:not(.input):not(.cal-day) {
+  transition: transform var(--dur-micro) var(--ease-out), background-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out), opacity var(--dur-micro) var(--ease-out);
+}
+button[aria-label]:not(.input):not(.cal-day):active:not(:disabled) { transform: scale(0.92); }
+.cal-day:active:not(:disabled), .time-item:active, .pop-item:active, .menu-item:active { transform: scale(0.96); }
+.cal-day, .time-item { transition-property: background-color, color, transform; }
+/* Cards of the stacked table acknowledge a press without moving the layout. */
+@media (max-width: 639.98px) {
+  .rtable tbody > tr { transition: background-color var(--dur-short) var(--ease-out); }
+  .rtable tbody > tr:active { background-color: color-mix(in oklab, var(--color-ink) 4%, transparent); }
+}
+/* Fields: the focus ring eases in instead of snapping. */
+.input, .ascii-input { transition: border-color var(--dur-micro) var(--ease-out), box-shadow var(--dur-short) var(--ease-out), background-color var(--dur-micro) var(--ease-out); }
+.input:focus-visible, .input:focus { box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-accent) 18%, transparent); }
+/* Skeleton shimmer and the live-feed highlight should not run for people who asked for less motion (base.css covers the rest). */
+@media (prefers-reduced-motion: reduce) { .input:focus { box-shadow: none; } }
+
+/* Tablets: four columns per card. */
+@media (min-width: 640px) and (max-width: 1023.98px) {
+  .rtable tbody > tr { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-sm) var(--space-lg); padding-block: var(--space-md); }
+}
+
+/* ---------- Navigation labels (iPad landscape, small laptops) ----------
+   Between 1024 and 1279px there is not room for seven labelled links, and touch screens have no tooltips,
+   so the page you are on always shows its name; the rest show theirs from 1280px. */
+.spot-label { display: none; }
+.spot-nav-item[aria-current="page"] .spot-label { display: inline; animation: fade-in 0.25s ease both; }
+@media (min-width: 1280px) { .spot-label { display: inline; } }
+
+/* ---------- Large monitors ----------
+   The shell widens (see --shell-max) and, on very large or high-density-scaled screens, the whole interface
+   scales up so text and controls stay a comfortable size instead of floating in empty space. */
+:root { --shell-max: 1440px; }
+@media (min-width: 1920px) { :root { --shell-max: 1680px; } }
+@media (min-width: 2200px) { :root { --shell-max: 1920px; } html { font-size: 112.5%; } }
+@media (min-width: 3000px) { :root { --shell-max: 2200px; } html { font-size: 125%; } }

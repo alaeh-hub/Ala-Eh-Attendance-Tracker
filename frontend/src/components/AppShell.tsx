@@ -1,5 +1,6 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
+import { animate as animeAnimate, stagger } from "animejs";
 import { motion } from "motion/react";
 import { useIdle } from "../hooks/useIdle";
 import { usePageChoreography } from "../hooks/usePageChoreography";
@@ -42,8 +43,8 @@ export function homeFor(role?: Role) {
 function Brand({ compact = false }: { compact?: boolean }) {
   const user = useAuthStore((s) => s.user);
   return (
-    <Link to={homeFor(user?.role)} className="flex items-center gap-3 rounded-lg transition-opacity hover:opacity-90">
-      <img src="/logo.png" alt="Ala Eh! Food Products" className="h-11 w-11 shrink-0 rounded-full" />
+    <Link to={homeFor(user?.role)} className="flex items-center gap-2.5 rounded-lg transition-opacity hover:opacity-90 sm:gap-3">
+      <img src="/logo.png" alt="Ala Eh! Food Products" className="h-9 w-9 shrink-0 rounded-full sm:h-11 sm:w-11" />
       {!compact && (
         <div className="leading-tight">
           <p className="font-display text-base font-bold tracking-tight text-white">
@@ -101,7 +102,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
           end={item.end}
           onClick={onNavigate}
           className={({ isActive }) =>
-            `relative flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-medium transition-colors active:bg-ink-700 ${
+            `relative flex min-h-11 items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-medium transition-colors active:bg-ink-700 ${
               isActive ? "bg-ink-750 text-white before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-brand-500" : "text-neutral-400 hover:bg-ink-800 hover:text-white"
             }`
           }
@@ -117,7 +118,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
         <NavLink
           to="/kiosk"
           onClick={onNavigate}
-          className="mt-3 flex items-center gap-3 rounded-lg border border-ink-600 px-3.5 py-2.5 text-sm font-medium text-brand-400 transition-colors hover:bg-ink-800 active:bg-ink-750"
+          className="mt-3 flex min-h-11 items-center gap-3 rounded-lg border border-ink-600 px-3.5 py-2.5 text-sm font-medium text-brand-400 transition-colors hover:bg-ink-800 active:bg-ink-750"
         >
           <Icon name="scan" className="h-[18px] w-[18px]" />
           Open kiosk
@@ -258,6 +259,94 @@ function Clock({ compact = false }: { compact?: boolean }) {
   );
 }
 
+/**
+ * Phone navigation drawer. Slides in from the left, closes on backdrop tap, Escape, or a swipe toward the edge it came from.
+ * Locks page scroll while open and respects reduced motion (closes instantly).
+ */
+function MobileDrawer({ onClose }: { onClose: () => void }) {
+  const [shown, setShown] = useState(true);
+  const closeBtn = useRef<HTMLButtonElement>(null);
+  const asideRef = useRef<HTMLElement>(null);
+  const animated = motionOK();
+  const close = () => (animated ? setShown(false) : onClose());
+  const closeRef = useRef(close);
+  closeRef.current = close;
+
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeBtn.current?.focus();
+    // Links and the account card rise in one after another once the panel has started to slide.
+    const items = animated ? Array.from(asideRef.current?.querySelectorAll<HTMLElement>("nav > a, [data-drawer-foot]") ?? []) : [];
+    items.forEach((e) => (e.style.opacity = "0"));
+    const intro = items.length
+      ? animeAnimate(items, {
+          opacity: [0, 1],
+          translateX: [-14, 0],
+          duration: 480,
+          ease: "outExpo",
+          delay: stagger(36, { start: 110 }),
+          onComplete: () => items.forEach((e) => ((e.style.opacity = ""), (e.style.transform = ""))),
+        })
+      : null;
+    const key = (e: KeyboardEvent) => e.key === "Escape" && closeRef.current();
+    document.addEventListener("keydown", key);
+    return () => {
+      intro?.pause();
+      items.forEach((e) => ((e.style.opacity = ""), (e.style.transform = "")));
+      document.body.style.overflow = prev;
+      document.removeEventListener("keydown", key);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-[var(--z-modal)] lg:hidden">
+      <motion.div
+        className="absolute inset-0 bg-black/70"
+        initial={animated ? { opacity: 0 } : false}
+        animate={{ opacity: shown ? 1 : 0 }}
+        transition={{ duration: 0.2 }}
+        onClick={close}
+        aria-hidden="true"
+      />
+      <motion.aside
+        ref={asideRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Menu"
+        drag={animated ? "x" : false}
+        dragConstraints={{ left: 0, right: 0 }}
+        dragElastic={{ left: 0.5, right: 0 }}
+        onDragEnd={(_, info) => {
+          if (info.offset.x < -70 || info.velocity.x < -450) close();
+        }}
+        initial={animated ? { x: "-100%" } : false}
+        animate={{ x: shown ? 0 : "-100%" }}
+        transition={{ type: "spring", stiffness: 420, damping: 40 }}
+        onAnimationComplete={() => !shown && onClose()}
+        className="absolute inset-y-0 left-0 flex h-dvh w-[min(280px,86vw)] touch-pan-y flex-col gap-5 overflow-y-auto overscroll-contain border-r border-white/10 bg-ink-900 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))]"
+      >
+        <div className="flex items-center justify-between">
+          <Brand />
+          <button
+            ref={closeBtn}
+            className="group grid h-11 w-11 place-items-center rounded-lg text-neutral-400 transition-colors hover:bg-white/10 hover:text-white active:bg-white/10"
+            onClick={close}
+            aria-label="Close menu"
+          >
+            <Icon name="close" className="h-5 w-5 transition-transform duration-200 group-hover:rotate-90" />
+          </button>
+        </div>
+        <NavLinks onNavigate={close} />
+        <div className="mt-auto" data-drawer-foot>
+          <UserCard />
+        </div>
+      </motion.aside>
+    </div>
+  );
+}
+
 export default function AppShell({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const user = useAuthStore((s) => s.user);
@@ -275,11 +364,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const showIdleScreen = idle && location.pathname !== "/kiosk";
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-dvh">
       {showIdleScreen && <IdleScreen />}
       {/* Desktop top bar: brand and spotlight nav on the left, the account menu on the right */}
       <header className="topbar hidden lg:block">
-        <div className="mx-auto flex h-[68px] w-full max-w-[1440px] items-center gap-6 px-8">
+        <div className="mx-auto flex h-[68px] w-full max-w-[var(--shell-max)] items-center gap-6 px-8">
           <Brand />
           <div className="flex min-w-0 flex-1 justify-start self-stretch pl-2">
             <TopNav />
@@ -289,34 +378,20 @@ export default function AppShell({ children }: { children: ReactNode }) {
       </header>
 
       {/* Mobile top bar */}
-      <header className="topbar flex h-16 items-center justify-between px-4 lg:hidden">
+      <header className="topbar flex min-h-[var(--topbar-h)] items-center justify-between pl-[max(1rem,env(safe-area-inset-left))] pr-[max(0.5rem,env(safe-area-inset-right))] lg:hidden">
         <Brand />
-        <button className="rounded-xl p-2 text-neutral-300 transition-colors duration-200 hover:bg-white/10 active:scale-[.92]" onClick={() => setOpen(true)} aria-label="Open menu">
+        <button
+          className="grid h-11 w-11 place-items-center rounded-xl text-neutral-300 transition-[background-color,transform] duration-200 hover:bg-white/10 active:scale-[.92] active:bg-white/10"
+          onClick={() => setOpen(true)}
+          aria-label="Open menu"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+        >
           <Icon name="menu" className="h-6 w-6" />
         </button>
       </header>
 
-      {open && (
-        <div className="fixed inset-0 z-40 lg:hidden">
-          <div className="absolute inset-0 bg-black/70 animate-fade-in" onClick={() => setOpen(false)} />
-          <div className="absolute inset-y-0 left-0 flex w-[280px] flex-col gap-6 border-r border-white/10 bg-ink-900 p-5 animate-slide-in">
-            <div className="flex items-center justify-between">
-              <Brand />
-              <button
-                className="group rounded-lg p-1.5 text-neutral-400 transition-colors hover:bg-white/10 hover:text-white"
-                onClick={() => setOpen(false)}
-                aria-label="Close menu"
-              >
-                <Icon name="close" className="h-5 w-5 transition-transform duration-200 group-hover:rotate-90" />
-              </button>
-            </div>
-            <NavLinks onNavigate={() => setOpen(false)} />
-            <div className="mt-auto">
-              <UserCard />
-            </div>
-          </div>
-        </div>
-      )}
+      {open && <MobileDrawer onClose={() => setOpen(false)} />}
 
       <motion.main
         ref={mainRef}
@@ -324,7 +399,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         initial={motionOK() ? { opacity: 0, y: 10 } : false}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.38, ease: EASE_OUT }}
-        className="mx-auto w-full min-w-0 max-w-[1440px] overflow-x-clip px-4 py-6 sm:px-6 lg:px-8 lg:py-10"
+        className="mx-auto w-full min-w-0 max-w-[var(--shell-max)] overflow-x-clip px-[max(1rem,env(safe-area-inset-left))] pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-5 sm:px-6 sm:pt-6 lg:px-8 lg:pb-10 lg:pt-10"
       >
         {children}
       </motion.main>

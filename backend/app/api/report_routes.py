@@ -27,6 +27,7 @@ from app.services.attendance_service import (
 from app.services.embedding_index import active_engine, model_filter
 from app.utils.auth import load_current_user, require_roles
 from app.utils.ratelimit import rate_limit, user_key
+from app.utils.search import smart_filter
 from app.utils.timezone import now_in_org_tz, org_day_bounds_utc, org_tz, to_naive_utc, to_org_tz, utcnow
 
 report_bp = Blueprint("reports", __name__)
@@ -404,9 +405,10 @@ def hours_summary_pdf():
 
     start_day, end_day = _range_args()
     rows = _daily_rows(load_current_user(), start_day, end_day)
-    q = (request.args.get("q") or "").strip().lower()
+    q = (request.args.get("q") or "").strip()
     if q:
-        rows = [r for r in rows if q in (r["user_name"] or "").lower() or q in (r["employee_code"] or "").lower()]
+        # The same smart search the Records page applies on screen, so the PDF lists exactly the rows you were looking at.
+        rows = smart_filter(rows, q, lambda r: (r["user_name"], r["employee_code"], r["department"]), rank=False)
     summary = _hours_summary(rows)
 
     regular = sum(p["hours"] for p in summary)

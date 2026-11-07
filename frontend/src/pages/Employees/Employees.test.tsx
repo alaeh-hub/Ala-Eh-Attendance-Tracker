@@ -53,7 +53,27 @@ describe("Employees page", () => {
     await screen.findByText("Maria Santos");
     await userEvent.type(screen.getByPlaceholderText(/Search name/), "juan");
     expect(screen.queryByText("Maria Santos")).not.toBeInTheDocument();
-    expect(screen.getByText("Juan Dela Cruz")).toBeInTheDocument();
+    // The matched part is underlined, so the name is split across elements; its row still reads as the full name.
+    const mark = screen.getByText("Juan", { selector: "mark" });
+    expect(mark.parentElement).toHaveTextContent("Juan Dela Cruz");
+  });
+
+  it("forgives a typo and finds the person anyway", async () => {
+    setup();
+    await screen.findByText("Maria Santos");
+    await userEvent.type(screen.getByPlaceholderText(/Search name/), "jaun");
+    expect(screen.queryByText("Maria Santos")).not.toBeInTheDocument();
+    expect(screen.getByText("Juan", { selector: "mark" }).parentElement).toHaveTextContent("Juan Dela Cruz");
+  });
+
+  it("clears the search with the clear button and brings everyone back", async () => {
+    setup();
+    await screen.findByText("Maria Santos");
+    await userEvent.type(screen.getByPlaceholderText(/Search name/), "juan");
+    expect(screen.queryByText("Maria Santos")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(await screen.findByText("Maria Santos")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Search name/)).toHaveValue("");
   });
 
   it("clears all data only after the password and DELETE are entered", async () => {

@@ -119,7 +119,7 @@ export default function Departments() {
 
       <div className="panel overflow-hidden animate-fade-up" style={{ animationDelay: "80ms" }}>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[800px] table-fixed text-sm">
+          <table className="rtable w-full min-w-[800px] table-fixed text-sm">
             <colgroup>
               <col className="w-[200px]" />
               <col className="w-[260px]" />
@@ -148,10 +148,10 @@ export default function Departments() {
               {!loading &&
                 departments.map((d) => (
                   <tr key={d.id} className="transition-colors hover:bg-white/[0.02]">
-                    <td className="table-cell">
+                    <td className="table-cell cell-primary">
                       <p className="font-semibold text-white">{d.name}</p>
                     </td>
-                    <td className="table-cell">
+                    <td data-label="Schedule" className="table-cell cell-full">
                       {d.has_shifting ? (
                         <div className="flex flex-col gap-1">
                           {d.shifts.map((s) => (
@@ -168,7 +168,7 @@ export default function Departments() {
                         </p>
                       )}
                     </td>
-                    <td className="table-cell">
+                    <td data-label="Roles" className="table-cell cell-full">
                       {d.roles.length ? (
                         <div className="flex flex-wrap gap-x-4 gap-y-1">
                           {d.roles.map((r) => (
@@ -181,8 +181,8 @@ export default function Departments() {
                         <span className="text-neutral-500">—</span>
                       )}
                     </td>
-                    <td className="table-cell text-neutral-300">{d.employee_count}</td>
-                    <td className="table-cell">
+                    <td data-label="Employees" className="table-cell text-neutral-300">{d.employee_count}</td>
+                    <td className="table-cell cell-actions">
                       <div className="flex justify-end gap-1">
                         <button onClick={() => setEditing(d)} className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-white/10 hover:text-white" title="Edit" aria-label={`Edit ${d.name}`}>
                           <Icon name="edit" className="h-4 w-4" />

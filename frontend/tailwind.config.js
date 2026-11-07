@@ -4,6 +4,11 @@ export default {
   darkMode: "class",
   theme: {
     extend: {
+      // Type scale lives in tokens.css as --fs-*/--lh-* pairs so phones get a smaller step
+      // without touching every `text-*` class. `sm:` and up read the desktop values.
+      fontSize: Object.fromEntries(
+        ["xs", "sm", "base", "lg", "xl", "2xl", "3xl", "4xl", "5xl", "6xl", "7xl"].map((k) => [k, [`var(--fs-${k})`, `var(--lh-${k})`]])
+      ),
       fontFamily: {
         sans: ["var(--font-body)"],
         display: ["var(--font-display)"],

@@ -1,7 +1,7 @@
 import { ReactNode, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { animate as tween } from "motion";
-import { motion } from "motion/react";
+import { AnimatePresence, motion, useDragControls } from "motion/react";
 import { EASE_OUT, motionOK } from "../lib/motion";
 import api from "../services/api";
 import Icon, { IconName } from "./Icon";
@@ -161,14 +161,14 @@ export function PageHeader({
   leading?: ReactNode;
 }) {
   return (
-    <div className="mb-8 animate-fade-up">
-      <p className="section-rule mb-4" aria-hidden="true">
+    <div className="mb-5 animate-fade-up sm:mb-8">
+      <p className="section-rule mb-3 sm:mb-4" aria-hidden="true">
         {`┌─ ${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
       </p>
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
+        <div className="flex min-w-0 items-center gap-3">
           {leading}
-          <div>
+          <div className="min-w-0">
             <h1 className="font-display text-3xl font-bold tracking-tight text-white sm:text-4xl">
               {title}
               <span className="ascii-cursor text-brand-400" aria-hidden="true">_</span>
@@ -176,7 +176,7 @@ export function PageHeader({
             {subtitle && <p className="mt-1 text-sm text-neutral-400" style={{ fontFamily: "var(--font-mono)" }}>{subtitle}</p>}
           </div>
         </div>
-        {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+        {actions && <div className="page-actions flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
     </div>
   );
@@ -205,7 +205,7 @@ export function StatCard({
     >
       <p className="text-sm font-medium text-neutral-400">{label}</p>
       {loading ? (
-        <div className="skeleton mt-3 h-9 w-16" />
+        <div className="skeleton mt-3 h-8 w-14 sm:h-9 sm:w-16" />
       ) : (
         <p className={`mt-2 font-display text-6xl font-bold tabular-nums tracking-tight ${accent ? "text-brand-400" : "text-white"}`}>{shown}</p>
       )}
@@ -216,10 +216,15 @@ export function StatCard({
 
 export function EmptyState({ icon, title, message, action }: { icon: IconName; title: string; message?: string; action?: ReactNode }) {
   return (
-    <div className="flex flex-col items-center justify-center px-6 py-14 text-center animate-fade-in">
-      <span className="mb-4 text-brand-400">
+    <div className="flex flex-col items-center justify-center px-6 py-10 text-center animate-fade-in sm:py-14">
+      <motion.span
+        className="mb-4 text-brand-400"
+        initial={motionOK() ? { opacity: 0, scale: 0.6, rotate: -10 } : false}
+        animate={{ opacity: 1, scale: 1, rotate: 0 }}
+        transition={{ type: "spring", stiffness: 300, damping: 16, delay: 0.1 }}
+      >
         <Icon name={icon} className="h-8 w-8" />
-      </span>
+      </motion.span>
       <p className="font-semibold text-neutral-200">{title}</p>
       {message && <p className="mt-1 max-w-sm text-sm text-neutral-500">{message}</p>}
       {action && <div className="mt-5">{action}</div>}
@@ -246,6 +251,10 @@ export function Modal({
 }) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
+  const dragControls = useDragControls();
+  // Phones get a bottom sheet: drag its header down to dismiss. Decided once per open so it doesn't flip mid-gesture.
+  const sheet = useRef<boolean | null>(null);
+  if (sheet.current === null || !open) sheet.current = motionOK() && !!window.matchMedia?.("(max-width: 639.98px)").matches;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
@@ -255,6 +264,9 @@ export function Modal({
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
     const panel = panelRef.current;
+    // The page behind a dialog must not scroll under the user's finger.
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     const focusables = () => (panel ? Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)) : []);
     // Respect an autoFocus inside the dialog; otherwise focus the first control.
     if (panel && !panel.contains(document.activeElement)) (focusables()[0] ?? panel).focus();
@@ -289,35 +301,68 @@ export function Modal({
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
       if (previous && document.contains(previous)) previous.focus();
     };
   }, [open]);
 
-  if (!open) return null;
+  // Exits only play when the parent keeps <Modal> mounted and flips `open` (ConfirmDialog does); a parent that
+  // unmounts it outright still closes instantly. Tests and reduced-motion users get no animation at all.
+  const animated = motionOK();
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
-      <div className="absolute inset-0 bg-black/70 animate-fade-in" onClick={onClose} aria-hidden="true" />
+    <AnimatePresence>
+      {open && (
+    <div key="modal" className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center p-0 sm:items-center sm:p-4">
+      <motion.div
+        className="absolute inset-0 bg-black/70"
+        initial={animated ? { opacity: 0 } : false}
+        animate={{ opacity: 1 }}
+        exit={animated ? { opacity: 0, transition: { duration: 0.18 } } : undefined}
+        transition={{ duration: 0.22 }}
+        onClick={onClose}
+        aria-hidden="true"
+      />
       <motion.div
         ref={panelRef}
-        initial={motionOK() ? { opacity: 0, y: 18, scale: 0.97 } : false}
+        initial={animated ? (sheet.current ? { opacity: 1, y: "100%" } : { opacity: 0, y: 18, scale: 0.97 }) : false}
         animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={animated ? (sheet.current ? { y: "100%", transition: { duration: 0.24, ease: [0.55, 0, 1, 0.45] } } : { opacity: 0, y: 10, scale: 0.98, transition: { duration: 0.16 } }) : undefined}
         transition={{ type: "spring", stiffness: 380, damping: 32 }}
+        drag={sheet.current ? "y" : false}
+        dragControls={dragControls}
+        dragListener={false}
+        dragConstraints={{ top: 0, bottom: 0 }}
+        dragElastic={{ top: 0, bottom: 0.6 }}
+        onDragEnd={(_, info) => {
+          if (info.offset.y > 110 || info.velocity.y > 600) onCloseRef.current();
+        }}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={`surface relative max-h-[92vh] w-full overflow-y-auto rounded-b-none border-white/10 bg-ink-850 outline-none sm:rounded-2xl ${wide ? "sm:max-w-2xl" : "sm:max-w-md"}`}
+        className={`surface relative max-h-[92dvh] w-full overflow-y-auto overscroll-contain rounded-b-none border-white/10 bg-ink-850 outline-none sm:rounded-2xl ${wide ? "sm:max-w-2xl" : "sm:max-w-md"}`}
       >
-        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.06] bg-ink-850/95 px-6 py-4">
-          <h2 id={titleId} className="text-lg font-bold text-white">{title}</h2>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-neutral-400 hover:bg-white/10 hover:text-white" aria-label="Close">
-            <Icon name="close" className="h-5 w-5" />
-          </button>
+        <div
+          className="sticky top-0 z-10 border-b border-white/[0.06] bg-ink-850/95 px-4 pb-3 pt-2 sm:px-6 sm:py-4"
+          style={sheet.current ? { touchAction: "none" } : undefined}
+          onPointerDown={(e) => sheet.current && dragControls.start(e)}
+        >
+          <span className="mx-auto mb-2 block h-1 w-9 rounded-full bg-white/20 sm:hidden" aria-hidden="true" />
+          <div className="flex items-center justify-between gap-3">
+            <h2 id={titleId} className="min-w-0 text-base font-bold text-white sm:text-lg">{title}</h2>
+            <button onClick={onClose} onPointerDown={(e) => e.stopPropagation()} className="-mr-2 grid h-10 w-10 place-items-center rounded-lg text-neutral-400 hover:bg-white/10 hover:text-white active:bg-white/10 sm:mr-0 sm:h-9 sm:w-9" aria-label="Close">
+              <Icon name="close" className="h-5 w-5" />
+            </button>
+          </div>
         </div>
-        <div className="px-6 py-5">{children}</div>
-        {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-white/[0.06] px-6 py-4">{footer}</div>}
+        <div className="px-4 py-4 sm:px-6 sm:py-5">{children}</div>
+        {footer && (
+          <div className="flex flex-col-reverse gap-2 border-t border-white/[0.06] px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:flex-row sm:flex-wrap sm:justify-end sm:px-6 sm:py-4 [&>button]:w-full sm:[&>button]:w-auto">{footer}</div>
+        )}
       </motion.div>
-    </div>,
+    </div>
+      )}
+    </AnimatePresence>,
     document.body
   );
 }

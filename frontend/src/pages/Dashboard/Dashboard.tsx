@@ -158,21 +158,21 @@ export default function Dashboard() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-5 lg:grid-cols-4">
         <StatCard label="Present today" accent loading={loading} value={report?.present ?? 0} hint={report ? `${attendanceRate}% of ${report.total_employees} employees` : undefined} delay={0} />
         <StatCard label="On site now" loading={loading} value={report?.currently_in ?? 0} hint="Clocked in, not yet out" delay={60} />
         <StatCard label="Late arrivals" loading={loading} value={report?.late ?? 0} hint="First clock-in after shift start" delay={120} />
         <StatCard label="Not yet in" loading={loading} value={report?.absent ?? 0} hint={report ? `${report.enrolled} of ${report.total_employees} enrolled` : undefined} delay={180} />
       </div>
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-[1.6fr_1fr]">
+      <div className="mt-5 grid gap-5 sm:mt-6 sm:gap-6 xl:grid-cols-[1.6fr_1fr]">
         <section className="panel min-w-0 py-5 animate-fade-up" style={{ animationDelay: "200ms" }}>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="font-bold text-white">Activity by hour</h2>
               <p className="text-xs text-neutral-500">{report?.events_today ?? 0} scans today · {report?.timezone}</p>
             </div>
-            <div className="flex items-center gap-4 text-xs text-neutral-300" aria-label="Legend">
+            <div className="flex items-center gap-3 text-xs text-neutral-300 sm:gap-4" aria-label="Legend">
               {SERIES.map((s) => (
                 <span key={s.key} className="flex items-center gap-1.5">
                   <span className="h-2.5 w-2.5 rounded-sm" style={{ background: s.color }} />
@@ -181,7 +181,7 @@ export default function Dashboard() {
               ))}
             </div>
           </div>
-          <div className="h-72">
+          <div className="h-56 sm:h-72">
             {loading ? (
               <div className="skeleton h-full w-full" />
             ) : (
@@ -239,13 +239,13 @@ export default function Dashboard() {
         </section>
 
         <section className="panel flex min-w-0 flex-col animate-fade-up xl:h-0 xl:min-h-full" style={{ animationDelay: "260ms" }}>
-          <div className="flex items-center justify-between border-b border-white/[0.06] px-5 py-4">
+          <div className="flex items-center justify-between border-b border-white/[0.06] px-3 py-3 sm:px-5 sm:py-4">
             <h2 className="font-bold text-white">Live feed</h2>
             <UnderlineLink to="/records" className="text-xs font-semibold text-brand-400">
               View all
             </UnderlineLink>
           </div>
-          <div className="max-h-[560px] flex-1 overflow-y-auto p-2 xl:max-h-none">
+          <div className="max-h-[70dvh] flex-1 overflow-y-auto overscroll-contain p-1 sm:max-h-[560px] sm:p-2 xl:max-h-none">
             {loading &&
               Array.from({ length: 5 }).map((_, i) => (
                 <div key={i} className="flex items-center gap-3 p-3">
@@ -260,16 +260,16 @@ export default function Dashboard() {
             {events.map((e) => (
               <div
                 key={e.id}
-                className={`reveal-item flex items-center gap-3 rounded-xl p-3 transition-colors duration-700 hover:bg-white/[0.03] ${flashId === e.id ? "bg-brand-500/10" : ""}`}
+                className={`reveal-item flex items-center gap-2.5 rounded-xl p-2.5 transition-colors sm:gap-3 sm:p-3 duration-700 hover:bg-white/[0.03] ${flashId === e.id ? "bg-brand-500/10" : ""}`}
               >
-                <Avatar userId={e.user_id} name={e.user_name} hasPhoto={e.has_photo} size="h-10 w-10" />
+                <Avatar userId={e.user_id} name={e.user_name} hasPhoto={e.has_photo} size="h-9 w-9 sm:h-10 sm:w-10" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold text-white">{e.user_name ?? "Unknown"}</p>
                   <p className="truncate text-xs text-neutral-500">
                     {[e.employee_code, e.department].filter(Boolean).join(" · ") || "—"}
                   </p>
                 </div>
-                <div className="flex shrink-0 flex-col items-end gap-1">
+                <div className="flex max-w-[52%] shrink-0 flex-col items-end gap-1 sm:max-w-none">
                   <EventBadge type={e.event_type} session={e.session} late={e.is_late} lateMinutes={e.late_minutes} earlyMinutes={e.early_minutes} />
                   <span className="text-[11px] tabular-nums text-neutral-500" title={formatDateTime(e.timestamp)}>
                     {formatTime(e.timestamp)} · {timeAgo(e.timestamp)}

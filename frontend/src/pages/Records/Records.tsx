@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import EmployeePicker, { PickedEmployee } from "../../components/admin/EmployeePicker";
 import Pager from "../../components/admin/Pager";
 import Tabs, { tabPanelProps } from "../../components/admin/Tabs";
@@ -10,7 +10,9 @@ import { useAuthStore } from "../../stores/authStore";
 import { toast } from "../../stores/toastStore";
 import type { AttendanceEvent, DailyRow } from "../../types";
 import { datetimeLocalToApi, formatDate, formatTime, orgDate, orgMonthStart, toDatetimeLocal } from "../../utils/orgTime";
-import { smartMatch } from "../../utils/search";
+import Highlight from "../../components/Highlight";
+import SearchInput from "../../components/SearchInput";
+import { smartFilter } from "../../utils/search";
 import { Select, DateField, DateTimeField } from "../../components/fields";
 
 type EventRow = AttendanceEvent;
@@ -136,13 +138,14 @@ export default function Records() {
     load();
   }, [load]);
 
-  const dailyRows = daily.filter((r) => smartMatch(search, [r.user_name, r.employee_code, r.department]));
+  const q = useDeferredValue(search);
+  const dailyRows = smartFilter(daily, q, (r) => [r.user_name, r.employee_code, r.department]);
   const [shown, setShown] = useState(ROWS_PER_PAGE);
   useEffect(() => setShown(ROWS_PER_PAGE), [daily, search]);
   // Operators can't use the employee picker (it needs the admin-only user list), so their
   // text filter narrows the page that is loaded.
   const pageFilter = !isAdmin && !isStaff;
-  const eventRows = pageFilter ? events.filter((e) => smartMatch(search, [e.user_name, e.employee_code, e.department])) : events;
+  const eventRows = pageFilter ? smartFilter(events, q, (e) => [e.user_name, e.employee_code, e.department]) : events;
 
   const totals = useMemo(
     () => ({
@@ -219,30 +222,27 @@ export default function Records() {
               type="button"
               aria-pressed={activePreset === p.key}
               onClick={() => setRange(preset(p.key))}
-              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${activePreset === p.key ? "bg-brand-500 text-black" : "bg-white/[0.04] text-neutral-300 hover:bg-white/[0.08]"}`}
+              className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors sm:py-1.5 ${activePreset === p.key ? "bg-brand-500 text-black" : "bg-white/[0.04] text-neutral-300 hover:bg-white/[0.08]"}`}
             >
               {p.label}
             </button>
           ))}
-          <div className="flex items-center gap-2">
-            <DateField className="input w-auto py-1.5" value={from} max={to || undefined} onChange={(e) => setRange([e.target.value, to])} aria-label="From date" />
+          <div className="flex w-full items-center gap-2 sm:w-auto">
+            <DateField className="input min-w-0 flex-1 py-1.5 sm:w-auto sm:flex-none" value={from} max={to || undefined} onChange={(e) => setRange([e.target.value, to])} aria-label="From date" />
             <span className="text-neutral-500" aria-hidden="true">→</span>
-            <DateField className="input w-auto py-1.5" value={to} min={from || undefined} onChange={(e) => setRange([from, e.target.value])} aria-label="To date" />
+            <DateField className="input min-w-0 flex-1 py-1.5 sm:w-auto sm:flex-none" value={to} min={from || undefined} onChange={(e) => setRange([from, e.target.value])} aria-label="To date" />
           </div>
         </div>
         {!isStaff && (
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
             {showSearch && (
-              <div className="relative flex-1">
-                <Icon name="search" className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
-                <input
-                  className="input pl-10"
-                  placeholder={tab === "log" ? "Filter this page by name or ID…" : "Filter by employee name or ID…"}
-                  aria-label="Filter by employee"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
-              </div>
+              <SearchInput
+                className="flex-1"
+                placeholder={tab === "log" ? "Filter this page by name or ID…" : "Filter by employee name, ID or department…"}
+                aria-label="Filter by employee"
+                value={search}
+                onValueChange={setSearch}
+              />
             )}
             {tab === "log" && isAdmin && (
               <div className="flex-1">
@@ -289,7 +289,7 @@ export default function Records() {
           </div>
           <div className="panel overflow-hidden animate-fade-up">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[860px] table-fixed text-sm">
+              <table className="rtable w-full min-w-[860px] table-fixed text-sm">
                 <colgroup>
                   <col className="w-[140px]" />
                   <col className="w-[220px]" />
@@ -315,21 +315,21 @@ export default function Records() {
                   {!loading &&
                     dailyRows.slice(0, shown).map((r) => (
                       <tr key={`${r.user_id}-${r.date}`} className="hover:bg-white/[0.02]">
-                        <td className="table-cell whitespace-nowrap text-neutral-400">{formatDate(r.date, SHORT_DATE)}</td>
-                        <td className="table-cell">
-                          <p className="font-semibold text-white">{r.user_name}</p>
+                        <td data-label="Work day" className="table-cell cell-full whitespace-nowrap text-neutral-400">{formatDate(r.date, SHORT_DATE)}</td>
+                        <td className="table-cell cell-primary">
+                          <p className="font-semibold text-white"><Highlight text={r.user_name} query={q} /></p>
                           <p className="text-xs text-neutral-500">{[r.employee_code, r.department].filter(Boolean).join(" · ")}</p>
                         </td>
-                        <td className="table-cell tabular-nums text-neutral-200">
+                        <td data-label="Time in" className="table-cell tabular-nums text-neutral-200">
                           <TimeWithDay iso={r.first_in} workDate={r.date} />
                         </td>
-                        <td className="table-cell tabular-nums text-neutral-200">
+                        <td data-label="Time out" className="table-cell tabular-nums text-neutral-200">
                           {r.last_out ? <TimeWithDay iso={r.last_out} workDate={r.date} /> : r.open && !missedTimeOut(r) ? <span className="tag tag-ok">On site</span> : "—"}
                         </td>
-                        <td className="table-cell font-semibold tabular-nums text-white">{hoursLabel(r.hours)}</td>
-                        <td className="table-cell tabular-nums text-neutral-300">{r.ot_hours ? hoursLabel(r.ot_hours) : "—"}</td>
-                        <td className="table-cell">
-                          <div className="flex flex-col gap-0.5">
+                        <td data-label="Hours" className="table-cell font-semibold tabular-nums text-white">{hoursLabel(r.hours)}</td>
+                        <td data-label="OT" className="table-cell tabular-nums text-neutral-300">{r.ot_hours ? hoursLabel(r.ot_hours) : "—"}</td>
+                        <td data-label="Status" className="table-cell cell-full">
+                          <div className="flex flex-col gap-0.5 max-lg:flex-row max-lg:flex-wrap max-lg:gap-x-3">
                             {r.late ? (
                               <span className="tag tag-warn">Late{r.late_minutes ? ` ${formatMinutes(r.late_minutes)}` : ""}</span>
                             ) : r.first_in ? (
@@ -364,7 +364,7 @@ export default function Records() {
       ) : (
         <div className="panel overflow-hidden animate-fade-up" {...(isStaff ? {} : tabPanelProps("records", "log"))}>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] table-fixed text-sm">
+            <table className="rtable w-full min-w-[760px] table-fixed text-sm">
               <colgroup>
                 <col className="w-[150px]" />
                 {!isStaff && <col className="w-[220px]" />}
@@ -395,7 +395,7 @@ export default function Records() {
                     const otherWorkDay = e.work_date && e.work_date !== calendarDay ? e.work_date : null;
                     return (
                       <tr key={e.id} className="hover:bg-white/[0.02]">
-                        <td className="table-cell whitespace-nowrap">
+                        <td data-label="When" className="table-cell whitespace-nowrap">
                           <p className="font-semibold tabular-nums text-white">{formatTime(e.timestamp)}</p>
                           <p className="text-xs text-neutral-500">{formatDate(e.timestamp, SHORT_DATE)}</p>
                           {otherWorkDay && (
@@ -405,20 +405,20 @@ export default function Records() {
                           )}
                         </td>
                         {!isStaff && (
-                          <td className="table-cell">
+                          <td className="table-cell cell-primary">
                             <div className="flex items-center gap-3">
                               <Avatar userId={e.user_id} name={e.user_name} hasPhoto={e.has_photo} size="h-8 w-8" text="text-[10px]" />
                               <div className="min-w-0">
-                                <p className="truncate font-semibold text-white">{e.user_name}</p>
+                                <p className="truncate font-semibold text-white"><Highlight text={e.user_name} query={q} /></p>
                                 <p className="truncate text-xs text-neutral-500">{[e.employee_code, e.department].filter(Boolean).join(" · ")}</p>
                               </div>
                             </div>
                           </td>
                         )}
-                        <td className="table-cell">
+                        <td data-label="Event" className="table-cell cell-full">
                           <EventBadge type={e.event_type} session={e.session} late={e.is_late} lateMinutes={e.late_minutes} earlyMinutes={e.early_minutes} />
                         </td>
-                        <td className="table-cell text-xs">
+                        <td data-label="Method" className="table-cell cell-full cell-wrap text-xs">
                           {e.match_status === "MANUAL" ? (
                             <span className="text-orange-300" title={e.notes ?? ""}>
                               Manual{e.notes ? ` — ${e.notes.replace(/^Manual:\s*/, "")}` : ""}
@@ -430,9 +430,9 @@ export default function Records() {
                             </span>
                           )}
                         </td>
-                        <td className="table-cell font-mono text-xs text-neutral-500">{e.device_id || "—"}</td>
+                        <td data-label="Device" className="table-cell font-mono text-xs text-neutral-500">{e.device_id || "—"}</td>
                         {isAdmin && (
-                          <td className="table-cell text-right">
+                          <td className="table-cell cell-actions text-right">
                             <div className="flex justify-end gap-1">
                               <button
                                 onClick={() => setEditing(e)}

@@ -1,4 +1,5 @@
 import { KeyboardEvent, ReactNode, useRef } from "react";
+import { motion, useReducedMotion } from "motion/react";
 
 /**
  * Accessible segmented tabs (role="tablist"/"tab", aria-selected, arrow-key
@@ -20,6 +21,7 @@ export default function Tabs<K extends string>({
   className?: string;
 }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const reduce = useReducedMotion();
 
   function onKeyDown(e: KeyboardEvent<HTMLButtonElement>, i: number) {
     let next = -1;
@@ -49,9 +51,17 @@ export default function Tabs<K extends string>({
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(t.key)}
             onKeyDown={(e) => onKeyDown(e, i)}
-            className={`-mb-px flex-1 border-b-2 px-1 py-2.5 text-sm font-semibold transition-colors sm:flex-none ${selected ? "border-brand-500 text-brand-400" : "border-transparent text-neutral-400 hover:text-white"}`}
+            className={`relative -mb-px flex-1 border-b-2 border-transparent px-1 py-2.5 text-sm font-semibold transition-colors sm:flex-none ${selected ? "text-brand-400" : "text-neutral-400 hover:text-white"}`}
           >
             {t.label}
+            {selected && (
+              <motion.span
+                layoutId={`${idPrefix}-tab-underline`}
+                className="absolute inset-x-0 -bottom-0.5 h-0.5 bg-brand-500"
+                transition={reduce ? { duration: 0 } : { type: "spring", stiffness: 520, damping: 42 }}
+                aria-hidden="true"
+              />
+            )}
           </button>
         );
       })}

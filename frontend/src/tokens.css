@@ -17,10 +17,46 @@
   --radius-card: 12px; --radius-ctl: 8px; --radius-pill: 999px; --rule-hair: 1px; --shadow-card: none;
   --tracking-display: -0.02em;
 
+  /* Tailwind text scale (see tailwind.config.js). Values equal Tailwind's defaults on tablet/desktop. */
+  --fs-xs: 0.75rem; --lh-xs: 1rem;
+  --fs-sm: 0.875rem; --lh-sm: 1.25rem;
+  --fs-base: 1rem; --lh-base: 1.5rem;
+  --fs-lg: 1.125rem; --lh-lg: 1.75rem;
+  --fs-xl: 1.25rem; --lh-xl: 1.75rem;
+  --fs-2xl: 1.5rem; --lh-2xl: 2rem;
+  --fs-3xl: 1.875rem; --lh-3xl: 2.25rem;
+  --fs-4xl: 2.25rem; --lh-4xl: 2.5rem;
+  --fs-5xl: 3rem; --lh-5xl: 1;
+  --fs-6xl: 3.75rem; --lh-6xl: 1;
+  --fs-7xl: 4.5rem; --lh-7xl: 1;
+  /* Fixed header heights, so the sticky offset and the drawer can agree. */
+  --topbar-h: 4rem;
+
   /* Channel triplets so Tailwind opacity modifiers (bg-brand-500/20) keep working. */
   --ch-ink-950: 14 13 11; --ch-ink-900: 18 17 15; --ch-ink-850: 23 22 19; --ch-ink-800: 28 27 23;
   --ch-ink-750: 35 33 28; --ch-ink-700: 44 42 36; --ch-ink-600: 60 57 49; --ch-ink-500: 84 80 69;
   --ch-brand-50: 255 251 234; --ch-brand-100: 255 243 196; --ch-brand-200: 255 232 138; --ch-brand-300: 255 219 77; --ch-brand-400: 253 208 35;
   --ch-brand-500: 245 192 0; --ch-brand-600: 212 160 0; --ch-brand-700: 167 122 0; --ch-brand-800: 122 89 0; --ch-brand-900: 77 56 0;
   --ch-white: 255 255 255; --ch-black: 0 0 0;
+}
+
+/* Phones: one step down across the board. Small text stays >= 11px; headings and big numbers shrink the most. */
+@media (max-width: 639.98px) {
+  :root {
+    --fs-xs: 0.6875rem; --lh-xs: 1rem;
+    --fs-sm: 0.8125rem; --lh-sm: 1.15rem;
+    --fs-base: 0.875rem; --lh-base: 1.35rem;
+    --fs-lg: 1rem; --lh-lg: 1.5rem;
+    --fs-xl: 1.0625rem; --lh-xl: 1.5rem;
+    --fs-2xl: 1.1875rem; --lh-2xl: 1.6rem;
+    --fs-3xl: 1.4375rem; --lh-3xl: 1.85rem;
+    --fs-4xl: 1.6875rem; --lh-4xl: 2rem;
+    --fs-5xl: 2.125rem; --lh-5xl: 1;
+    --fs-6xl: 2.625rem; --lh-6xl: 1;
+    --fs-7xl: 3rem; --lh-7xl: 1;
+
+    /* The scaffold's own scale, used by body, labels and the ASCII sign-in. */
+    --text-xs: 0.6875rem; --text-sm: 0.8125rem; --text-md: 0.875rem; --text-lg: 1rem; --text-xl: 1.125rem; --text-2xl: 1.3rem; --text-3xl: 1.55rem;
+    --topbar-h: 3.5rem;
+  }
 }

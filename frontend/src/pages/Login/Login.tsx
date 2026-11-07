@@ -43,7 +43,7 @@ export default function Login() {
   }
 
   return (
-    <div className="ascii-page relative grid h-dvh place-items-center overflow-hidden px-4">
+    <div className="ascii-page relative grid min-h-dvh place-items-center overflow-x-hidden px-4 py-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-[max(1.5rem,env(safe-area-inset-top))]">
 
       <main className="relative z-[1] w-full max-w-[380px] animate-fade-in">
         <div className="relative z-[3]">
@@ -58,7 +58,7 @@ export default function Login() {
         </div>
         <p className="mt-2 text-sm text-neutral-400">Secure access to Ala Eh! attendance.</p>
 
-        <form onSubmit={handleSubmit} className="mt-8 space-y-6">
+        <form onSubmit={handleSubmit} className="mt-6 space-y-5 sm:mt-8 sm:space-y-6">
           <label className="block">
             <span className="label">Email</span>
             <input
@@ -77,7 +77,7 @@ export default function Login() {
             <span className="label">Password</span>
             <div className="relative">
               <input
-                className="ascii-input pr-11"
+                className="ascii-input pr-12"
                 type={showPassword ? "text" : "password"}
                 autoComplete="current-password"
                 required
@@ -88,7 +88,7 @@ export default function Login() {
               <button
                 type="button"
                 onClick={() => setShowPassword((v) => !v)}
-                className={`absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 transition-colors ${showPassword ? "text-brand-400" : "text-neutral-400 hover:text-neutral-100"}`}
+                className={`absolute right-1 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-lg transition-colors ${showPassword ? "text-brand-400" : "text-neutral-400 hover:text-neutral-100"}`}
                 aria-label={showPassword ? "Hide password" : "Show password"}
               >
                 <Icon name="eye" className="h-4 w-4" />
@@ -103,7 +103,7 @@ export default function Login() {
             </div>
           )}
 
-          <button type="submit" disabled={loading} className="btn-primary w-full py-3.5 text-[15px]">
+          <button type="submit" disabled={loading} className="btn-primary w-full py-3.5 text-sm sm:text-[15px]">
             {loading ? <Spinner /> : <Icon name="login" className="h-4 w-4" />}
             {loading ? "Signing in..." : "Sign in"}
           </button>

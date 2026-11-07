@@ -1,8 +1,10 @@
 import { KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import api from "../../services/api";
 import type { User } from "../../types";
-import Icon from "../Icon";
+import Highlight from "../Highlight";
+import SearchInput from "../SearchInput";
 import { Spinner } from "../ui";
+import { smartRank } from "../../utils/search";
 import { isCancelled, totalCount, useLatestRequest } from "./request";
 
 export type PickedEmployee = Pick<User, "id" | "full_name"> & Partial<Pick<User, "employee_code" | "department">>;
@@ -73,7 +75,12 @@ export default function EmployeePicker({
   const [active, setActive] = useState(0);
   const search = useUserSearch(query, { status, enabled: open && !value });
   const { total, loading, error } = search;
-  const users = excludeRoles.length ? search.users.filter((u) => !excludeRoles.includes(u.role)) : search.users;
+  // The server filtered with the same smart search; this puts the best match on top and lets us underline what matched.
+  const users = smartRank(
+    excludeRoles.length ? search.users.filter((u) => !excludeRoles.includes(u.role)) : search.users,
+    query,
+    (u) => [u.full_name, u.employee_code, u.email, u.department, u.position]
+  );
 
   useEffect(() => setActive(0), [search.users]);
 
@@ -97,6 +104,8 @@ export default function EmployeePicker({
         pick(users[active]);
       }
     } else if (e.key === "Escape" && open) {
+      // preventDefault keeps the search box from also clearing itself; a second Escape (list closed) clears it.
+      e.preventDefault();
       e.stopPropagation();
       setOpen(false);
     }
@@ -135,35 +144,26 @@ export default function EmployeePicker({
       <label className="label" htmlFor={id}>
         {label}
       </label>
-      <div className="relative">
-        <Icon name="search" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
-        <input
-          ref={inputRef}
-          id={id}
-          className="input pl-10"
-          role="combobox"
-          aria-expanded={open}
-          aria-controls={listId}
-          aria-autocomplete="list"
-          aria-activedescendant={open && users[active] ? `${listId}-${users[active].id}` : undefined}
-          autoComplete="off"
-          autoFocus={autoFocus}
-          placeholder={placeholder}
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setOpen(true);
-          }}
-          onFocus={() => setOpen(true)}
-          onBlur={() => setTimeout(() => setOpen(false), 150)}
-          onKeyDown={onKeyDown}
-        />
-        {loading && (
-          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-brand-400">
-            <Spinner />
-          </span>
-        )}
-      </div>
+      <SearchInput
+        ref={inputRef}
+        id={id}
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        aria-activedescendant={open && users[active] ? `${listId}-${users[active].id}` : undefined}
+        autoFocus={autoFocus}
+        placeholder={placeholder}
+        value={query}
+        onValueChange={(v) => {
+          setQuery(v);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onKeyDown={onKeyDown}
+        trailing={loading ? <Spinner className="mr-1 h-4 w-4 text-brand-400" /> : undefined}
+      />
       {open && (
         <ul id={listId} role="listbox" aria-label={label} className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-white/10 bg-ink-850 p-1 shadow-xl">
           {users.map((u, i) => (
@@ -177,8 +177,8 @@ export default function EmployeePicker({
               onMouseEnter={() => setActive(i)}
               className={`cursor-pointer rounded-lg px-3 py-2 text-sm ${i === active ? "bg-brand-500/15 text-white" : "text-neutral-300"}`}
             >
-              <span className="font-semibold">{u.full_name}</span>
-              <span className="ml-2 text-xs text-neutral-500">{[u.employee_code, u.department].filter(Boolean).join(" · ")}</span>
+              <span className="font-semibold"><Highlight text={u.full_name} query={query} /></span>
+              <span className="ml-2 text-xs text-neutral-500"><Highlight text={[u.employee_code, u.department].filter(Boolean).join(" · ")} query={query} /></span>
             </li>
           ))}
           {!loading && users.length === 0 && (

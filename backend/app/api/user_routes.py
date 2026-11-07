@@ -15,6 +15,7 @@ from app.services.embedding_index import active_engine, embedding_index, model_f
 from app.utils.audit import log_action
 from app.utils.auth import KIOSK_ROLE, load_current_user, require_roles
 from app.utils.crypto import CryptoError, decrypt_bytes
+from app.utils.search import smart_filter
 from app.utils.security import hash_password
 from app.utils.validators import is_valid_email, is_valid_password
 
@@ -128,15 +129,14 @@ def create_user():
     return jsonify(user.to_dict(sample_count=0)), 201
 
 
+# A search scores at most this many employees (newest first); well past any realistic headcount.
+SEARCH_SCAN_LIMIT = 20000
+
+
 @user_bp.get("")
 @require_roles("ADMIN")
 def list_users():
     q = User.query
-    search = (request.args.get("q") or "").strip()
-    if search:
-        like = f"%{search}%"
-        q = q.filter(or_(User.full_name.ilike(like), User.email.ilike(like),
-                         User.employee_code.ilike(like), User.department.ilike(like)))
     if request.args.get("department"):
         q = q.filter(User.department == request.args["department"])
     status = request.args.get("status")
@@ -145,17 +145,30 @@ def list_users():
     elif status == "inactive":
         q = q.filter(User.is_active.is_(False))
 
-    total = q.count()
-    q = q.order_by(User.created_at.desc(), User.id)
-    # Without `limit` every match is returned (older clients); the body stays
-    # a plain array either way and the total travels in X-Total-Count.
     limit = _int_arg("limit", minimum=1)
     offset = _int_arg("offset", minimum=0) or 0
-    if limit is not None:
-        q = q.limit(min(limit, MAX_PAGE))
-    if offset:
-        q = q.offset(offset)
-    users = q.all()
+    search = (request.args.get("q") or "").strip()
+    if search:
+        # Smart search (see app/utils/search.py): every word must match, accents and typos are forgiven, best match first.
+        cols = (User.id, User.full_name, User.employee_code, User.email, User.department, User.position)
+        rows = q.with_entities(*cols).order_by(User.created_at.desc(), User.id).limit(SEARCH_SCAN_LIMIT).all()
+        ranked_ids = [r.id for r in smart_filter(rows, search, lambda r: (r.full_name, r.employee_code, r.email, r.department, r.position))]
+        total = len(ranked_ids)
+        page_ids = ranked_ids[offset:]
+        if limit is not None:
+            page_ids = page_ids[:min(limit, MAX_PAGE)]
+        by_id = {u.id: u for u in User.query.filter(User.id.in_(page_ids)).all()} if page_ids else {}
+        users = [by_id[i] for i in page_ids if i in by_id]
+    else:
+        total = q.count()
+        q = q.order_by(User.created_at.desc(), User.id)
+        # Without `limit` every match is returned (older clients); the body stays
+        # a plain array either way and the total travels in X-Total-Count.
+        if limit is not None:
+            q = q.limit(min(limit, MAX_PAGE))
+        if offset:
+            q = q.offset(offset)
+        users = q.all()
     counts = _sample_counts([u.id for u in users]) if limit is not None else _sample_counts()
     response = jsonify([u.to_dict(sample_count=counts.get(u.id, 0)) for u in users])
     response.headers["X-Total-Count"] = str(total)

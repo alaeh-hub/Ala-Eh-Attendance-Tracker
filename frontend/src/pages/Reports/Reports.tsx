@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import Pager from "../../components/admin/Pager";
 import Tabs, { tabPanelProps } from "../../components/admin/Tabs";
@@ -9,7 +9,9 @@ import api, { downloadFile, errorMessage } from "../../services/api";
 import { toast } from "../../stores/toastStore";
 import type { TodayReport } from "../../types";
 import { formatDate, formatTimeWithSeconds, orgDate, orgMonthStart } from "../../utils/orgTime";
-import { smartMatch } from "../../utils/search";
+import Highlight from "../../components/Highlight";
+import SearchInput from "../../components/SearchInput";
+import { smartFilter } from "../../utils/search";
 import { Select, DateField } from "../../components/fields";
 
 interface HoursEmployee {
@@ -159,7 +161,8 @@ export default function Reports() {
     load();
   }, [load]);
 
-  const rows = (summary?.employees ?? []).filter((e) => smartMatch(search, [e.user_name, e.employee_code, e.department]));
+  const q = useDeferredValue(search);
+  const rows = smartFilter(summary?.employees ?? [], q, (e) => [e.user_name, e.employee_code, e.department], { rank: true });
   // Totals follow the search box so what's on screen matches the numbers shown.
   const totals = useMemo(
     () => ({
@@ -235,22 +238,19 @@ export default function Reports() {
                   type="button"
                   aria-pressed={activePreset === p.key}
                   onClick={() => setRange(preset(p.key))}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${activePreset === p.key ? "bg-brand-500 text-black" : "bg-white/[0.04] text-neutral-300 hover:bg-white/[0.08]"}`}
+                  className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors sm:py-1.5 ${activePreset === p.key ? "bg-brand-500 text-black" : "bg-white/[0.04] text-neutral-300 hover:bg-white/[0.08]"}`}
                 >
                   {p.label}
                 </button>
               ))}
-              <div className="flex items-center gap-2">
-                <DateField className="input w-auto py-1.5" value={from} max={to} onChange={(e) => e.target.value && setRange([e.target.value, to])} aria-label="From date" />
+              <div className="flex w-full items-center gap-2 sm:w-auto">
+                <DateField className="input min-w-0 flex-1 py-1.5 sm:w-auto sm:flex-none" value={from} max={to} onChange={(e) => e.target.value && setRange([e.target.value, to])} aria-label="From date" />
                 <span className="text-neutral-500" aria-hidden="true">→</span>
-                <DateField className="input w-auto py-1.5" value={to} min={from} onChange={(e) => e.target.value && setRange([from, e.target.value])} aria-label="To date" />
+                <DateField className="input min-w-0 flex-1 py-1.5 sm:w-auto sm:flex-none" value={to} min={from} onChange={(e) => e.target.value && setRange([from, e.target.value])} aria-label="To date" />
               </div>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">
-              <div className="relative flex-1">
-                <Icon name="search" className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
-                <input className="input pl-10" placeholder="Filter by employee name or ID…" aria-label="Filter by employee" value={search} onChange={(e) => setSearch(e.target.value)} />
-              </div>
+              <SearchInput className="flex-1" placeholder="Filter by employee name, ID or department…" aria-label="Filter by employee" value={search} onValueChange={setSearch} note={`${rows.length} of ${summary?.employees.length ?? 0}`} />
               <Select className="input sm:w-52" value={department} onChange={(e) => setDepartment(e.target.value)} aria-label="Department">
                 <option value="">All departments</option>
                 {departments.map((d) => (
@@ -269,14 +269,14 @@ export default function Reports() {
             ].map(([k, v]) => (
               <div key={k} className="stat">
                 <p className="text-[11px] font-semibold text-neutral-500">{k}</p>
-                <p className="mt-0.5 text-xl font-extrabold tabular-nums text-white">{loading ? "—" : v}</p>
+                <p className="mt-0.5 text-lg font-extrabold tabular-nums text-white sm:text-xl">{loading ? "—" : v}</p>
               </div>
             ))}
           </div>
 
           <div className="panel overflow-hidden animate-fade-up">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[760px] text-sm">
+              <table className="rtable w-full min-w-[760px] text-sm">
                 <thead className="border-b border-white/[0.06] bg-white/[0.02]">
                   <tr>
                     <th className="table-head">Employee</th>
@@ -304,16 +304,16 @@ export default function Reports() {
                   {!loading &&
                     rows.map((r) => (
                       <tr key={r.user_id} className="hover:bg-white/[0.02]">
-                        <td className="table-cell">
-                          <p className="font-semibold text-white">{r.user_name}</p>
+                        <td className="table-cell cell-primary">
+                          <p className="font-semibold text-white"><Highlight text={r.user_name} query={q} /></p>
                           <p className="text-xs text-neutral-500">{[r.employee_code, r.department].filter(Boolean).join(" · ")}</p>
                         </td>
-                        <td className="table-cell tabular-nums text-neutral-300">{r.days_worked}</td>
-                        <td className="table-cell tabular-nums text-neutral-200">{hoursLabel(r.hours)}</td>
-                        <td className="table-cell tabular-nums text-neutral-300">{r.ot_hours ? hoursLabel(r.ot_hours) : "—"}</td>
-                        <td className="table-cell font-semibold tabular-nums text-white">{hoursLabel(r.total_hours)}</td>
-                        <td className="table-cell tabular-nums text-neutral-300">{r.late_days || "—"}</td>
-                        <td className="table-cell text-right">
+                        <td data-label="Days" className="table-cell tabular-nums text-neutral-300">{r.days_worked}</td>
+                        <td data-label="Regular" className="table-cell tabular-nums text-neutral-200">{hoursLabel(r.hours)}</td>
+                        <td data-label="OT" className="table-cell tabular-nums text-neutral-300">{r.ot_hours ? hoursLabel(r.ot_hours) : "—"}</td>
+                        <td data-label="Total" className="table-cell font-semibold tabular-nums text-white">{hoursLabel(r.total_hours)}</td>
+                        <td data-label="Late days" className="table-cell tabular-nums text-neutral-300">{r.late_days || "—"}</td>
+                        <td className="table-cell cell-actions text-right">
                           <button
                             onClick={() => exportPdf(r.user_id)}
                             disabled={exporting !== null}
@@ -322,6 +322,7 @@ export default function Reports() {
                             aria-label={`Download hours PDF for ${r.user_name}`}
                           >
                             {exporting === r.user_id ? <Spinner /> : <Icon name="download" className="h-4 w-4" />}
+                            <span className="ml-2 text-xs font-semibold lg:hidden">Download PDF</span>
                           </button>
                         </td>
                       </tr>
@@ -335,15 +336,15 @@ export default function Reports() {
       ) : (
         <div {...tabPanelProps("reports", "audit")}>
           <div className="bar mb-4 flex flex-wrap items-end gap-2 animate-fade-up">
-            <label className="block">
+            <label className="block min-w-[9rem] flex-1 sm:flex-none">
               <span className="label">From</span>
-              <DateField className="input w-auto py-1.5" value={auditFilter.from} max={auditFilter.to || undefined} onChange={(e) => setAuditFilter((f) => ({ ...f, from: e.target.value }))} />
+              <DateField className="input w-full py-1.5 sm:w-auto" value={auditFilter.from} max={auditFilter.to || undefined} onChange={(e) => setAuditFilter((f) => ({ ...f, from: e.target.value }))} />
             </label>
-            <label className="block">
+            <label className="block min-w-[9rem] flex-1 sm:flex-none">
               <span className="label">To</span>
-              <DateField className="input w-auto py-1.5" value={auditFilter.to} min={auditFilter.from || undefined} onChange={(e) => setAuditFilter((f) => ({ ...f, to: e.target.value }))} />
+              <DateField className="input w-full py-1.5 sm:w-auto" value={auditFilter.to} min={auditFilter.from || undefined} onChange={(e) => setAuditFilter((f) => ({ ...f, to: e.target.value }))} />
             </label>
-            <label className="block min-w-[220px] flex-1">
+            <label className="block min-w-[min(220px,100%)] flex-1">
               <span className="label">Action</span>
               <input
                 className="input py-1.5 font-mono text-xs"
@@ -366,7 +367,7 @@ export default function Reports() {
           </div>
           <div className="panel overflow-hidden animate-fade-up">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
+            <table className="rtable w-full min-w-[640px] text-sm">
               <thead className="border-b border-white/[0.06] bg-white/[0.02]">
                 <tr>
                   <th className="table-head">When</th>
@@ -379,10 +380,10 @@ export default function Reports() {
                 {!loading &&
                   audit.map((a) => (
                     <tr key={a.id} className="hover:bg-white/[0.02]">
-                      <td className="table-cell whitespace-nowrap tabular-nums text-neutral-400">{auditWhen(a.created_at)}</td>
-                      <td className="table-cell text-white">{a.actor_name ?? "System"}</td>
-                      <td className="table-cell font-mono text-xs text-neutral-300">{a.action}</td>
-                      <td className="table-cell max-w-[320px] truncate text-xs text-neutral-500" title={a.details ?? ""}>{a.details ?? ""}</td>
+                      <td data-label="When" className="table-cell whitespace-nowrap tabular-nums text-neutral-400">{auditWhen(a.created_at)}</td>
+                      <td data-label="Who" className="table-cell text-white">{a.actor_name ?? "System"}</td>
+                      <td data-label="Action" className="table-cell cell-full cell-wrap font-mono text-xs text-neutral-300">{a.action}</td>
+                      <td data-label="Details" className={`table-cell cell-full cell-wrap max-w-[320px] truncate text-xs text-neutral-500 ${a.details ? "" : "max-lg:hidden"}`} title={a.details ?? ""}>{a.details ?? ""}</td>
                     </tr>
                   ))}
               </tbody>
