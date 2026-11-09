@@ -111,6 +111,67 @@ def debug_detect():
     return jsonify({"debug": run_blocking(detect_for_debug, frame.read(), zone)})
 
 
+def _punch_selection() -> tuple[str | None, str | None]:
+    """
+    The kiosk's six buttons (AM/PM/OT x In/Out) arrive as a (session,
+    event_type) pair, or neither for "Auto". Both are only hints:
+    attendance_service.resolve_punch decides the punch that is actually
+    written, overruling a selection the day's record contradicts. See the
+    `corrected` flag on a MATCHED response.
+    """
+    event_type = request.form.get("event_type") or None
+    if event_type and event_type not in EVENT_TYPES:
+        raise AppError("event_type must be CLOCK_IN or CLOCK_OUT.", 400)
+    session = request.form.get("session") or None
+    if session and session not in SESSIONS:
+        raise AppError("session must be AM, PM or OT.", 400)
+    if bool(session) != bool(event_type):
+        raise AppError("session and event_type must be sent together.", 400)
+    return event_type, session
+
+
+def _burst_meta(result: dict, debug: dict | None) -> dict:
+    """Fields every check-in answer carries. With `debug` (development only) the
+    answer also says what the detector saw and how the match scored."""
+    meta = {
+        "elapsed_ms": result.get("elapsed_ms"),
+        "frames_with_face": result.get("frames_with_face", 0),
+    }
+    if debug is not None:
+        number = lambda v: None if v is None else round(float(v), 4)  # noqa: E731 - numpy floats are not JSON-serialisable
+        debug.update(
+            status=result["status"],
+            engine=result.get("engine"),
+            threshold=number(setting("FACE_MATCH_THRESHOLD")),
+            score=number(result.get("score")),
+            runner_up=number(result.get("runner_up_score")),
+            vote_ratio=number(result.get("vote_ratio")),
+        )
+        meta["debug"] = debug
+    return meta
+
+
+def _identity(user: User) -> dict:
+    return {
+        "user_id": user.id,
+        "user_name": user.full_name,
+        "employee_code": user.employee_code,
+        "department": user.department,
+        "has_photo": user.photo is not None,
+    }
+
+
+def _evaluate_liveness(result: dict, user: User, device_id: str) -> dict:
+    cfg = current_app.config
+    if result.get("liveness_identity_mismatch"):
+        # A borrowed blink taints the whole attempt: blinks pooled from
+        # the previous few seconds may have come from the same trick.
+        liveness_tracker.discard((device_id, user.id))
+    return liveness_tracker.add_and_evaluate(
+        (device_id, user.id), result["ears"], cfg["LIVENESS_WINDOW_SECONDS"], cfg["LIVENESS_EAR_BLINK_DELTA"]
+    )
+
+
 @recognition_bp.post("/check-in")
 @require_roles(*KIOSK_ROLES, allow_kiosk=True)
 @rate_limit("check-in", limit=60, per=60, key=user_ip_key)
@@ -134,19 +195,7 @@ def check_in():
     if len(files) > MAX_FRAMES:
         raise AppError(f"No more than {MAX_FRAMES} frames may be sent per check-in.", 413)
     device_id = _device_id(load_current_user())
-    # The kiosk's six buttons (AM/PM/OT x In/Out) arrive as a
-    # (session, event_type) pair, or neither for "Auto". Both are only
-    # hints: attendance_service.resolve_punch decides the punch that is
-    # actually written, overruling a selection the day's record
-    # contradicts. See the `corrected` flag on a MATCHED response.
-    requested_event_type = request.form.get("event_type") or None
-    if requested_event_type and requested_event_type not in EVENT_TYPES:
-        raise AppError("event_type must be CLOCK_IN or CLOCK_OUT.", 400)
-    requested_session = request.form.get("session") or None
-    if requested_session and requested_session not in SESSIONS:
-        raise AppError("session must be AM, PM or OT.", 400)
-    if bool(requested_session) != bool(requested_event_type):
-        raise AppError("session and event_type must be sent together.", 400)
+    requested_event_type, requested_session = _punch_selection()
     cfg = current_app.config
 
     # Where the kiosk's guide oval sits in the frame. Absent or implausible = no restriction.
@@ -155,21 +204,7 @@ def check_in():
     # A production server ignores the flag.
     debug = {} if request.form.get("debug") == "1" and debug_allowed() else None
     result = run_blocking(recognize_burst, [f.read() for f in files], zone, debug)
-    meta = {
-        "elapsed_ms": result.get("elapsed_ms"),
-        "frames_with_face": result.get("frames_with_face", 0),
-    }
-    if debug is not None:
-        number = lambda v: None if v is None else round(float(v), 4)  # noqa: E731 - numpy floats are not JSON-serialisable
-        debug.update(
-            status=result["status"],
-            engine=result.get("engine"),
-            threshold=number(setting("FACE_MATCH_THRESHOLD")),
-            score=number(result.get("score")),
-            runner_up=number(result.get("runner_up_score")),
-            vote_ratio=number(result.get("vote_ratio")),
-        )
-        meta["debug"] = debug
+    meta = _burst_meta(result, debug)
 
     if result["status"] == "NO_FACE":
         logger.info("check-in device=%s status=NO_FACE reason=%r elapsed_ms=%s", device_id, result["reason"], result.get("elapsed_ms"))
@@ -189,13 +224,7 @@ def check_in():
     if not user or not user.is_active:
         _log_outcome("NO_MATCH", device_id, result, extra=" reason=inactive_or_deleted_user")
         return jsonify({"status": "NO_MATCH", "reason": "The matched employee is no longer active.", **meta}), 200
-    identity = {
-        "user_id": user.id,
-        "user_name": user.full_name,
-        "employee_code": user.employee_code,
-        "department": user.department,
-        "has_photo": user.photo is not None,
-    }
+    identity = _identity(user)
 
     if result.get("spoof_suspected"):
         _log_outcome("SPOOF_SUSPECTED", device_id, result, user=user, extra=f" spoof_score={result.get('spoof_score')}")
@@ -207,13 +236,7 @@ def check_in():
         }), 200
 
     if cfg["LIVENESS_REQUIRED"]:
-        if result.get("liveness_identity_mismatch"):
-            # A borrowed blink taints the whole attempt: blinks pooled from
-            # the previous few seconds may have come from the same trick.
-            liveness_tracker.discard((device_id, user.id))
-        liveness = liveness_tracker.add_and_evaluate(
-            (device_id, user.id), result["ears"], cfg["LIVENESS_WINDOW_SECONDS"], cfg["LIVENESS_EAR_BLINK_DELTA"]
-        )
+        liveness = _evaluate_liveness(result, user, device_id)
         if not liveness["passed"]:
             # Recognised but not yet proven live: tell the kiosk who we think
             # it is (first name only) so the prompt feels personal, but record
@@ -280,6 +303,6 @@ def check_in():
         # correction_note explains it in words the employee can read.
         "corrected": payload["corrected"],
         "correction_note": payload["correction_note"],
-        "reverify_seconds": current_app.config["ATTENDANCE_REVERIFY_WINDOW_SECONDS"],
+        "reverify_seconds": cfg["ATTENDANCE_REVERIFY_WINDOW_SECONDS"],
         **meta,
     }), 201

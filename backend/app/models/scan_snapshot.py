@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from app.extensions import db
+from app.models.types import Blob, UtcDateTime
 from app.models.user import iso_utc
 
 
@@ -29,13 +30,13 @@ class ScanSnapshot(db.Model):
     runner_up_score = db.Column(db.Float, nullable=True)
     spoof_score = db.Column(db.Float, nullable=True)
     device_id = db.Column(db.String(80), nullable=True)
-    image = db.Column(db.LargeBinary, nullable=False)
+    image = db.Column(Blob, nullable=False)
 
     # NULL = still pending review; ADDED | DISMISSED once an admin acted.
     resolution = db.Column(db.String(12), nullable=True)
     reviewed_by = db.Column(db.String(36), nullable=True)
-    reviewed_at = db.Column(db.DateTime, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    reviewed_at = db.Column(UtcDateTime, nullable=True)
+    created_at = db.Column(UtcDateTime, default=datetime.utcnow, index=True)
 
     def to_dict(self, names: dict | None = None):
         names = names or {}

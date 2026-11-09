@@ -1,6 +1,9 @@
 from app import create_app, socketio
+from app.warmup import warm_up
 
 app = create_app()
+# Load the face models now rather than inside the first request (see app/warmup.py).
+warm_up(app)
 
 if __name__ == "__main__":
     # Dev entrypoint. Never enable the debugger on a network-facing server.

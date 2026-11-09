@@ -1,11 +1,11 @@
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { homeFor } from "../../components/AppShell";
 import CameraView, { CameraTone } from "../../components/CameraView";
 import FaceDebugOverlay from "../../components/FaceDebugOverlay";
 import Icon from "../../components/Icon";
 import IdleScreen from "../../components/IdleScreen";
-import { Avatar, EventBadge, Modal, Spinner, formatTime } from "../../components/ui";
+import { Avatar, EventBadge, formatTime } from "../../components/ui";
 import { frameDifference, useCamera } from "../../hooks/useCamera";
 import { WAKE_EVENT, useIdle } from "../../hooks/useIdle";
 import { useOnline } from "../../hooks/useOnline";
@@ -17,24 +17,20 @@ import { useAuthStore } from "../../stores/authStore";
 import type { AttendanceEvent, CheckInResult } from "../../types";
 import { useFaceDebug } from "../../utils/faceDebug";
 import { guideZone } from "../../utils/guideZone";
-import { chime, preloadVoice, say, sayOnce, stopSpeaking, useAudioUnlock } from "../../utils/sound";
 import { BreakWindow, Direction, NOON, Session, defaultSession, sessionAllowed, sessionHint, toMinutes } from "../../utils/kioskSessions";
-import { formatDate, formatTime as formatOrgTime, orgMinutesNow, orgNow, orgParts, useOrgStore } from "../../utils/orgTime";
+import { orgMinutesNow } from "../../utils/orgTime";
+import { type Cue, NO_STREAK, type Phase, type Outcome, interpretCheckIn, interpretRequestFailure } from "./kioskOutcome";
+import { StatusOverride, deviceId, overridePunch } from "./kioskPunch";
+import KioskUnlock from "./KioskUnlock";
+import LiveClock from "./LiveClock";
+import { NoticeOverlay, SuccessOverlay } from "./ResultOverlays";
+import { chime, preloadVoice, say, sayOnce, stopSpeaking, useAudioUnlock } from "../../utils/sound";
 
 // 8 frames ~110ms apart ≈ 0.8s capture. Enough for multi-frame matching;
 // blink samples are pooled server-side across consecutive scans, so a blink
 // in any scan within a few seconds counts.
 const BURST_FRAMES = 8;
 const BURST_INTERVAL_MS = 110;
-const SUCCESS_HOLD_MS = 4000;
-// A punch that didn't match the button pressed needs longer on screen —
-// the employee has to actually read why it was changed.
-const CORRECTED_HOLD_MS = 7000;
-const NOTICE_HOLD_MS = 4000;
-// The spoken confirmation starts once the two-note chime has finished, so they don't talk over each other.
-const VOICE_AFTER_CHIME_MS = 400;
-// Prompts that come back on every scan ("please blink", "hold still") are spoken at most this often.
-const PROMPT_VOICE_GAP_MS = 6000;
 // With nobody touching the kiosk for this long, the idle screen (logo, greeting, clock) covers it.
 const KIOSK_IDLE_MS = 60_000;
 // After the idle screen is dismissed, taps are ignored for a moment so the wake-up tap
@@ -50,60 +46,13 @@ const PRESENCE_REFRESH_MS = 15_000;
 
 export const CONNECTION_ERROR_TEXT = "Not recorded — check the connection and try again.";
 
-type Phase =
-  | { kind: "idle" }
-  | { kind: "prompt"; text: string; tone: CameraTone }
-  | { kind: "success"; event: AttendanceEvent; note?: string; reverifySeconds?: number }
-  | { kind: "notice"; title: string; text: string; tone: "warn" | "error"; event?: AttendanceEvent; name?: string; userId?: string; hasPhoto?: boolean };
-
-function deviceId() {
-  try {
-    let id = localStorage.getItem("kiosk_device_id");
-    if (!id) {
-      id = `kiosk-${Math.random().toString(36).slice(2, 8)}`;
-      localStorage.setItem("kiosk_device_id", id);
-    }
-    return id;
-  } catch {
-    return "kiosk";
-  }
-}
-
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** The organisation's time (server clock and timezone), not the tablet's. */
-function LiveClock() {
-  const [now, setNow] = useState(orgNow);
-  useOrgStore((st) => st.timeZone); // re-render when the org timezone arrives
-  useEffect(() => {
-    const t = setInterval(() => setNow(orgNow()), 1000);
-    return () => clearInterval(t);
-  }, []);
-  return (
-    <div className="min-w-0">
-      <p className="whitespace-nowrap text-4xl font-extrabold tabular-nums leading-none tracking-tight text-white drop-shadow sm:text-6xl lg:text-7xl [@media(max-height:520px)]:!text-4xl">
-        {formatOrgTime(now.toISOString())}
-        <span className="ml-1.5 hidden text-2xl text-brand-400 sm:inline sm:text-3xl lg:text-4xl [@media(max-height:520px)]:!hidden">{String(orgParts(now).second).padStart(2, "0")}</span>
-      </p>
-      <p className="mt-1 truncate text-sm font-semibold text-neutral-100 drop-shadow sm:text-base lg:text-xl">{formatDate(now, { weekday: "long", month: "long", day: "numeric" })}</p>
-    </div>
-  );
-}
-
-type StatusOverride = "AUTO" | "AM_IN" | "AM_OUT" | "PM_IN" | "PM_OUT" | "OT_IN" | "OT_OUT";
-
-/**
- * What the employee picks is only a hint: the server decides the punch that
- * is actually recorded and tells us when it overruled the selection (see
- * `corrected` on the response), so a wrong tap can't write a wrong record.
- * The kiosk picks a direction (in / out) and, when one is chosen, which part
- * of the day it belongs to; with nothing chosen it stays on Auto.
- */
-/** Maps a kiosk selector choice to the (event_type, session) the API expects. */
-function overridePunch(status: StatusOverride): { event_type?: "CLOCK_IN" | "CLOCK_OUT"; session?: "AM" | "PM" | "OT" } {
-  if (status === "AUTO") return {};
-  const [session, direction] = status.split("_") as ["AM" | "PM" | "OT", "IN" | "OUT"];
-  return { event_type: direction === "IN" ? "CLOCK_IN" : "CLOCK_OUT", session };
+/** Plays one of the kiosk's sounds. */
+function playCue(cue: Cue) {
+  if ("chime" in cue) chime(cue.chime);
+  else if ("say" in cue) (cue.delay === undefined ? say(cue.say) : say(cue.say, cue.delay));
+  else sayOnce(cue.sayOnce, cue.gap);
 }
 
 export default function AttendanceKiosk() {
@@ -156,7 +105,7 @@ export default function AttendanceKiosk() {
   const faceDebug = useFaceDebug();
   const { wants: wantsDebug, report: reportDebug } = faceDebug;
   const holdUntil = useRef(0);
-  const streak = useRef({ noMatch: 0, unsure: 0 });
+  const streak = useRef(NO_STREAK);
   const device = useRef(deviceId());
 
   // Fetch the organisation's time and break window now and every few minutes; between fetches
@@ -222,6 +171,19 @@ export default function AttendanceKiosk() {
     setAuto(false);
   };
 
+  /** Does what the interpreted answer says: sounds, the phase on screen, the recent list. Returns the wait before the next scan. */
+  const applyOutcome = (outcome: Outcome): number => {
+    outcome.cues.forEach(playCue);
+    if (outcome.recordedEvent) {
+      const event = outcome.recordedEvent;
+      setDirection(null);
+      setRecent((r) => [event, ...r].slice(0, 6));
+    }
+    if (outcome.holdMs !== undefined) hold(outcome.phase, outcome.holdMs);
+    else setPhase(outcome.phase);
+    return outcome.waitMs;
+  };
+
   /** One scan. Returns how long to wait before the next automatic scan. */
   const scanOnce = useCallback(async (): Promise<number> => {
     if (inFlight.current) return 200;
@@ -244,92 +206,11 @@ export default function AttendanceKiosk() {
       setLastMs(Math.round(performance.now() - started));
       reportDebug(data.debug);
 
-      switch (data.status) {
-        case "MATCHED": {
-          streak.current = { noMatch: 0, unsure: 0 };
-          chime(true);
-          // Say what was actually recorded: the server may have overruled the button that was pressed.
-          say(data.event!.event_type === "CLOCK_IN" ? "kiosk.time_in" : "kiosk.time_out", VOICE_AFTER_CHIME_MS);
-          setDirection(null);
-          setRecent((r) => [data.event!, ...r].slice(0, 6));
-          const ms = data.corrected ? CORRECTED_HOLD_MS : SUCCESS_HOLD_MS;
-          hold(
-            { kind: "success", event: data.event!, note: data.correction_note ?? undefined, reverifySeconds: data.reverify_seconds },
-            ms
-          );
-          return ms;
-        }
-        case "COOLDOWN":
-          streak.current = { noMatch: 0, unsure: 0 };
-          say("kiosk.already_recorded");
-          hold(
-            { kind: "notice", title: `Already recorded, ${data.user_name?.split(" ")[0] ?? ""}`, text: data.reason || "", tone: "warn", event: data.event, name: data.user_name, userId: data.user_id, hasPhoto: data.has_photo },
-            NOTICE_HOLD_MS
-          );
-          return NOTICE_HOLD_MS;
-        case "VERIFIED":
-          streak.current = { noMatch: 0, unsure: 0 };
-          chime(true);
-          say("kiosk.verified", VOICE_AFTER_CHIME_MS);
-          hold(
-            { kind: "notice", title: `Verified, ${data.user_name?.split(" ")[0] ?? ""}`, text: data.reason || "", tone: "warn", event: data.event, name: data.user_name, userId: data.user_id, hasPhoto: data.has_photo },
-            NOTICE_HOLD_MS
-          );
-          return NOTICE_HOLD_MS;
-        case "LIVENESS_FAILED":
-          sayOnce("kiosk.blink", PROMPT_VOICE_GAP_MS);
-          setPhase({ kind: "prompt", text: `Hi ${data.first_name ?? "there"}! Please blink 👀`, tone: "scanning" });
-          return 0;
-        case "SPOOF_SUSPECTED":
-          streak.current = { noMatch: 0, unsure: 0 };
-          chime(false);
-          say("kiosk.live_face", VOICE_AFTER_CHIME_MS);
-          hold({ kind: "notice", title: "Live face required", text: data.reason || "Photos and screens are not accepted. Face the camera directly.", tone: "error" }, NOTICE_HOLD_MS);
-          return NOTICE_HOLD_MS;
-        case "LOW_CONFIDENCE":
-        case "AMBIGUOUS_MATCH":
-          streak.current.unsure += 1;
-          if (streak.current.unsure >= 4) {
-            streak.current.unsure = 0;
-            say("kiosk.cant_confirm");
-            hold({ kind: "notice", title: "Can't confirm who you are", text: data.reason || "Face the camera directly in good light, remove sunglasses or mask, and hold still.", tone: "warn" }, NOTICE_HOLD_MS);
-            return NOTICE_HOLD_MS;
-          }
-          sayOnce("kiosk.hold_still", PROMPT_VOICE_GAP_MS);
-          setPhase({ kind: "prompt", text: data.reason || "Hold still and look at the camera", tone: "scanning" });
-          return 150;
-        case "NO_MATCH":
-          streak.current.noMatch += 1;
-          if (streak.current.noMatch >= 2) {
-            streak.current.noMatch = 0;
-            chime(false);
-            say("kiosk.not_recognized", VOICE_AFTER_CHIME_MS);
-            hold({ kind: "notice", title: "Not recognized", text: "You don't appear to be enrolled. Please see an administrator.", tone: "error" }, NOTICE_HOLD_MS);
-            return NOTICE_HOLD_MS;
-          }
-          setPhase({ kind: "prompt", text: "Checking… look at the camera", tone: "scanning" });
-          return 150;
-        case "NO_FACE":
-        default:
-          streak.current = { noMatch: 0, unsure: 0 };
-          // Nothing is said when there is simply nobody there; only when someone needs to move or be alone.
-          if (data.reason?.startsWith("Multiple")) sayOnce("kiosk.one_person", PROMPT_VOICE_GAP_MS);
-          else if (data.reason?.startsWith("Move")) sayOnce(data.reason.includes("closer") ? "kiosk.move_closer" : "kiosk.move_circle", PROMPT_VOICE_GAP_MS);
-          setPhase(
-            data.reason?.startsWith("Multiple")
-              ? { kind: "prompt", text: "One person at a time, please", tone: "warn" }
-              : data.reason?.startsWith("Move")
-                ? { kind: "prompt", text: data.reason, tone: "warn" }
-                : { kind: "idle" }
-          );
-          return 450;
-      }
+      const { outcome, streak: nextStreak } = interpretCheckIn(data, streak.current);
+      streak.current = nextStreak;
+      return applyOutcome(outcome);
     } catch (err: any) {
-      chime(false);
-      say(err?.response ? "kiosk.not_recorded" : "kiosk.no_connection", VOICE_AFTER_CHIME_MS);
-      if (!err?.response) hold({ kind: "notice", title: "Connection problem", text: CONNECTION_ERROR_TEXT, tone: "error" }, NOTICE_HOLD_MS);
-      else hold({ kind: "notice", title: "Not recorded", text: errorMessage(err, "Check-in failed. Please try again."), tone: "error" }, NOTICE_HOLD_MS);
-      return NOTICE_HOLD_MS;
+      return applyOutcome(interpretRequestFailure(err, CONNECTION_ERROR_TEXT, (e) => errorMessage(e, "Check-in failed. Please try again.")));
     } finally {
       inFlight.current = false;
       setBusy(false);
@@ -630,133 +511,6 @@ export default function AttendanceKiosk() {
           navigate(user && homeFor(user.role) !== "/kiosk" ? homeFor(user.role) : "/admin", { replace: true });
         }}
       />
-    </div>
-  );
-}
-
-/** Password prompt guarding the way back into the admin portal. */
-function KioskUnlock({ open, onClose, onUnlocked, unlock }: { open: boolean; onClose: () => void; onUnlocked: () => void; unlock: (password: string) => Promise<void> }) {
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [checking, setChecking] = useState(false);
-
-  useEffect(() => {
-    if (open) {
-      setPassword("");
-      setError(null);
-    }
-  }, [open]);
-
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    if (!password || checking) return;
-    setChecking(true);
-    setError(null);
-    try {
-      // Server-enforced: swaps the kiosk-locked session for a normal one.
-      await unlock(password);
-      onUnlocked();
-    } catch (err: any) {
-      const code = err?.response?.data?.code;
-      setError(code === "WRONG_PASSWORD" ? "Wrong password. Try again." : errorMessage(err, "Could not verify the password."));
-      setPassword("");
-    } finally {
-      setChecking(false);
-    }
-  }
-
-  return (
-    <Modal open={open} onClose={onClose} title="Back to admin">
-      <form onSubmit={submit} className="space-y-4">
-        <p className="text-sm text-neutral-400">Enter your password to leave the kiosk and open the admin portal.</p>
-        <input
-          type="password"
-          className="input"
-          placeholder="Password"
-          autoFocus
-          autoComplete="current-password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          aria-label="Password"
-        />
-        {error && (
-          <p role="alert" className="text-sm text-red-300">
-            {error}
-          </p>
-        )}
-        <div className="flex gap-2">
-          <button type="button" className="btn-ghost flex-1" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="btn-primary flex-1" disabled={!password || checking}>
-            {checking ? <Spinner /> : <Icon name="key" className="h-4 w-4" />} Unlock
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-function SuccessOverlay({ phase }: { phase: Extract<Phase, { kind: "success" }> }) {
-  const { event, note, reverifySeconds } = phase;
-  const isIn = event.event_type === "CLOCK_IN";
-  return (
-    <div className="absolute inset-0 flex overflow-y-auto bg-black/70 p-4 animate-fade-in">
-      <div className="m-auto flex w-full max-w-md flex-col items-center text-center animate-scale-in">
-        <div className="relative mb-4 [@media(max-height:520px)]:mb-2">
-          <span className="absolute -inset-3 rounded-full bg-emerald-500/25 animate-pulse-ring" />
-          <Avatar userId={event.user_id} name={event.user_name} hasPhoto={event.has_photo} size="h-20 w-20 sm:h-28 sm:w-28 lg:h-32 lg:w-32 [@media(max-height:520px)]:h-16 [@media(max-height:520px)]:w-16" text="text-2xl sm:text-3xl" ring />
-          <span className="absolute -bottom-1 -right-1 flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500 text-black ring-4 ring-black">
-            <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M20 6 9 17l-5-5" strokeDasharray="48" className="animate-draw-check" />
-            </svg>
-          </span>
-        </div>
-        <p className="text-sm font-semibold text-brand-400">{isIn ? "Good day" : "See you"}</p>
-        <p className="mt-1 text-2xl font-extrabold tracking-tight text-white sm:text-3xl lg:text-4xl">{event.user_name}</p>
-        {(event.employee_code || event.department) && (
-          <p className="mt-1 text-sm text-neutral-400">{[event.employee_code, event.department].filter(Boolean).join(" · ")}</p>
-        )}
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-3 [@media(max-height:520px)]:mt-2 [@media(max-height:520px)]:py-2">
-          <EventBadge type={event.event_type} session={event.session} late={event.is_late} lateMinutes={event.late_minutes} earlyMinutes={event.early_minutes} />
-          <span className="text-xl font-bold tabular-nums text-white sm:text-2xl">{formatTime(event.timestamp)}</span>
-        </div>
-        {note && (
-          <p className="mt-3 max-w-sm rounded-xl border border-orange-400/40 bg-orange-500/10 px-4 py-2 text-sm text-orange-200">
-            <Icon name="alert" className="mr-1.5 inline h-4 w-4 align-[-3px]" />
-            {note}
-          </p>
-        )}
-        {!!reverifySeconds && (
-          <p className="mt-3 text-xs text-neutral-400">
-            Not sure it registered? Scan again within {reverifySeconds}s — it will only re-confirm this punch, never add another.
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function NoticeOverlay({ phase }: { phase: Extract<Phase, { kind: "notice" }> }) {
-  const isError = phase.tone === "error";
-  return (
-    <div className="absolute inset-x-0 bottom-0 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] animate-fade-up">
-      <div className={`flex items-center gap-4 rounded-2xl border bg-black/80 p-4 ${isError ? "border-red-500/40" : "border-orange-400/40"}`}>
-        {phase.userId ? (
-          <Avatar userId={phase.userId} name={phase.name} hasPhoto={phase.hasPhoto} size="h-12 w-12" />
-        ) : (
-          <span className={`rounded-xl p-3 ${isError ? "bg-red-500/15 text-red-300" : "bg-orange-500/15 text-orange-300"}`}>
-            <Icon name={isError ? "x_circle" : "alert"} className="h-6 w-6" />
-          </span>
-        )}
-        <div className="min-w-0">
-          <p className="font-bold text-white">{phase.title}</p>
-          <p className="text-sm text-neutral-300">
-            {phase.event ? `${phase.event.punch_label ?? (phase.event.event_type === "CLOCK_IN" ? "Clocked in" : "Clocked out")} at ${formatTime(phase.event.timestamp)}. ` : ""}
-            {phase.text}
-          </p>
-        </div>
-      </div>
     </div>
   );
 }

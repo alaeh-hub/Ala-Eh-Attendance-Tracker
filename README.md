@@ -2,7 +2,7 @@
 
 Ala Eh! is a browser-based employee attendance application. An administrator manages employees and their face enrollment; an authenticated operator runs the kiosk; employees identify themselves at the kiosk to record attendance. The system includes live attendance views, time records, reporting, manual corrections, an audit log, and a review queue for uncertain scans.
 
-This guide describes the implementation in this repository. The main components are a React/TypeScript frontend, a Flask API and recognition service, and either SQLite for local development or PostgreSQL for a deployed stack.
+This guide describes the implementation in this repository. The main components are a React/TypeScript frontend, a Flask API and recognition service, and MySQL 8.4 as the database, in development and in a deployed stack.
 
 ## Contents
 
@@ -241,7 +241,7 @@ The app calls `db.create_all()` and applies the in-place compatibility updater i
 
 ## Run locally
 
-Requirements: Python compatible with the pinned backend dependencies, Node.js/npm, and camera access from the browser. Local development defaults to SQLite and does not require Docker.
+Requirements: Python compatible with the pinned backend dependencies, Node.js/npm, and camera access from the browser. Local development needs a MySQL 8.x server (a local install, or `docker compose -f docker-compose.dev.yml up -d db`) and no other Docker.
 
 ### Backend
 
@@ -254,11 +254,25 @@ python seed_admin.py admin@example.com "Admin User"   # prompts for the password
 python run.py
 ```
 
+**Database.** Create the development database once, as a MySQL admin (`mysql -u root -p`):
+
+```sql
+CREATE DATABASE attendance CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE USER 'attendance'@'localhost' IDENTIFIED BY 'attendance-dev';
+GRANT ALL PRIVILEGES ON attendance.* TO 'attendance'@'localhost';
+```
+
+That is what the default `DATABASE_URL` (`mysql+pymysql://attendance:attendance-dev@127.0.0.1:3306/attendance`) expects. A MySQL URL without a charset gets `utf8mb4` added automatically.
+
 If `backend/.env` is the production config (it points `DATABASE_URL` at the Docker host `db`),
-create `backend/.env.local` with `APP_ENV=development` and `DATABASE_URL=sqlite:///attendance.db`.
+create `backend/.env.local` with `APP_ENV=development` and your local `DATABASE_URL`.
 It is loaded before `.env`, is gitignored and is never copied into the Docker image.
 
-The API listens on `http://localhost:5000`. The default SQLite database is created under Flask's instance directory. Create the initial administrator once; do not use the example password outside a local machine.
+The API listens on `http://localhost:5000`; in development it creates the tables on first start. Create the initial administrator once; do not use the example password outside a local machine.
+
+**Moving existing data from SQLite** (the old `instance/attendance.db`): create the empty database above, then
+`python tools/migrate_to_mysql.py --source sqlite:///instance/attendance.db --target mysql+pymysql://attendance:PASSWORD@127.0.0.1:3306/attendance`.
+It refuses a target that already has employees and prints row counts to check.
 
 ### Frontend
 
@@ -279,7 +293,7 @@ To use SFace, put the two YuNet/SFace ONNX files listed in [`backend/models/READ
 
 ## Run with Docker Compose
 
-**Production:** follow [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). The stack is Caddy (HTTPS with automatic or internal certificates; the only service publishing ports), the built frontend on unprivileged nginx, the backend under gunicorn/eventlet as a non-root user, PostgreSQL, and a daily `pg_dump` backup service. Browsers only allow camera access over HTTPS (or `localhost`), so kiosks on a LAN need the HTTPS setup described there. Database migrations run automatically when the backend starts (`python manage_db.py upgrade`).
+**Production:** follow [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). The stack is Caddy (HTTPS with automatic or internal certificates; the only service publishing ports), the built frontend on unprivileged nginx, the backend under gunicorn/eventlet as a non-root user, MySQL, and a daily `mysqldump` backup service (`deploy/backup.sh`, restored with `deploy/restore.sh`). Browsers only allow camera access over HTTPS (or `localhost`), so kiosks on a LAN need the HTTPS setup described there. Database migrations run automatically when the backend starts (`python manage_db.py upgrade`).
 
 ```powershell
 python backend/tools/generate_secrets.py --write backend/.env   # then edit CORS_ORIGINS
@@ -288,7 +302,7 @@ docker compose up -d --build
 docker compose exec backend python seed_admin.py admin@example.com "Admin User"
 ```
 
-**Development:** `docker compose -f docker-compose.dev.yml up --build` runs the Vite dev server with live reload on `http://localhost:5173`, the backend on `127.0.0.1:5000` and PostgreSQL on `127.0.0.1:5432`, with volumes separate from production.
+**Development:** `docker compose -f docker-compose.dev.yml up --build` runs the Vite dev server with live reload on `http://localhost:5173`, the backend on `127.0.0.1:5000` and MySQL on `127.0.0.1:3307` (3307 so it does not clash with a MySQL installed on the machine), with volumes separate from production.
 
 Keep `.env` files and encryption keys out of source control, and back up `FACE_DATA_KEY` separately from the database backups. Schema changes ship as Alembic migrations in `backend/migrations/`; `python manage_db.py check` verifies that the models and migrations agree.
 
@@ -299,7 +313,7 @@ The backend reads `.env` / environment variables through `backend/config.py`. Th
 | Variable | Default | Purpose |
 |---|---|---|
 | `APP_ENV` | `development` | `production` enables strict startup security checks |
-| `DATABASE_URL` | SQLite `attendance.db` | SQLAlchemy database connection; use PostgreSQL in production |
+| `DATABASE_URL` | `mysql+pymysql://attendance:attendance-dev@127.0.0.1:3306/attendance` | SQLAlchemy database connection (MySQL; connections use `utf8mb4` and READ COMMITTED). SQLite is refused in production |
 | `SECRET_KEY`, `JWT_SECRET_KEY` | Development placeholders | Flask and JWT signing secrets; set unique strong values |
 | `FACE_DATA_KEY` | unset | Fernet key for biometric data encryption at rest |
 | `FACE_ENGINE` | `auto` | `sface`, `dlib`, or auto-select based on model files |
@@ -328,7 +342,7 @@ The backend reads `.env` / environment variables through `backend/config.py`. Th
 | `LIVENESS_VERIFY_BLINK_FRAME` | `true` | Require the blink frame to match the recognized person |
 | `SPOOF_CHECK_FRAMES` | `3` | Frames scored by passive anti-spoofing (the worst score counts) |
 
-Threshold overrides are engine-dependent and should only be set after evaluation on representative local cameras and lighting. `backend/tools/evaluate_accuracy.py` evaluates thresholds; `backend/tools/encrypt_existing_data.py` encrypts existing biometric data; `backend/tools/migrate_to_postgres.py` supports moving a local database to PostgreSQL.
+Threshold overrides are engine-dependent and should only be set after evaluation on representative local cameras and lighting. `backend/tools/evaluate_accuracy.py` evaluates thresholds; `backend/tools/encrypt_existing_data.py` encrypts existing biometric data; `backend/tools/migrate_to_mysql.py` supports moving a local database to PostgreSQL.
 
 ## API overview
 
@@ -357,8 +371,8 @@ List endpoints for users, attendance and the audit log accept `limit`/`offset` a
 - The built-in texture heuristic is only a weak signal. In auto mode it is log-only and does not reject users without a MiniFASNet model.
 - Recognition is limited to the currently active engine's samples. If model availability changes such that auto-selection changes engines, old samples will be marked outdated and require re-enrollment.
 - Liveness samples and the embedding index are process memory. The run configuration expects one backend worker; multi-worker deployments need shared state or sticky/central coordination. Socket.IO scaling also needs a message queue.
-- Keep PostgreSQL backups, biometric encryption keys, and model files protected. Define retention and access procedures for face samples and snapshots in line with the organization's privacy requirements.
-- Tests: `cd backend; .venv\Scripts\python -m pytest tests -q` and `cd frontend; npm test`. CI (`.github/workflows/ci.yml`) also type-checks, builds both images and checks the migrations against PostgreSQL.
+- Keep MySQL backups, biometric encryption keys, and model files protected. Define retention and access procedures for face samples and snapshots in line with the organization's privacy requirements.
+- Tests: `cd backend; .venv\Scripts\python -m pytest tests -q` and `cd frontend; npm test`. CI (`.github/workflows/ci.yml`) also type-checks, builds both images and checks the migrations against MySQL (and runs `backend/tests/test_mysql_integration.py`, which needs `TEST_MYSQL_URL`).
 
 ## Repository map
 
@@ -378,5 +392,5 @@ frontend/
   src/services/     HTTP API client
   src/stores/       Authentication and toast state
   src/hooks/        Camera and interaction hooks
-docker-compose.yml  PostgreSQL + backend + frontend development stack
+docker-compose.yml  MySQL + backend + frontend development stack
 ```

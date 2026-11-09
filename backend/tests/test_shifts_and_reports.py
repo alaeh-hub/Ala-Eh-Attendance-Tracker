@@ -202,13 +202,13 @@ class OvernightFixedShiftTests(Base):
     def test_today_report_counts_night_worker_currently_in_after_midnight(self):
         self.punch(self.user, local(self.day, 22, 0), "CLOCK_IN")
         fake_now = local(self.next, 3, 0)
-        with mock.patch("app.api.report_routes.utcnow", return_value=fake_now):
+        with mock.patch("app.services.timesheet_service.utcnow", return_value=fake_now):
             today = self.client.get("/api/reports/today", headers=self.auth()).json
         self.assertEqual(today["present"], 1)
         self.assertEqual(today["currently_in"], 1)
         self.assertEqual(today["late"], 0)
         # And the open shift's hours run up to "now", break excluded.
-        with mock.patch("app.api.report_routes.utcnow", return_value=fake_now):
+        with mock.patch("app.services.timesheet_service.utcnow", return_value=fake_now):
             row = self.daily(self.day)[0]
         self.assertTrue(row["open"])
         self.assertAlmostEqual(row["hours"], 4.0, places=2)

@@ -15,7 +15,6 @@ from app.extensions import db
 from app.models.face_embedding import FaceEmbedding
 from app.models.user import User
 from app.vision._locks import native_lock
-from app.vision.embedding import normalize
 from app.vision.engines import get_engine
 from app.vision.matcher import rank_users
 

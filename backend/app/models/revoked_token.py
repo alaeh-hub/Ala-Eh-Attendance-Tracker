@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from app.extensions import db
+from app.models.types import UtcDateTime
 
 
 class RevokedToken(db.Model):
@@ -18,5 +19,5 @@ class RevokedToken(db.Model):
     jti = db.Column(db.String(36), primary_key=True)
     token_type = db.Column(db.String(10), nullable=False)  # access | refresh
     user_id = db.Column(db.String(36), nullable=True, index=True)
-    expires_at = db.Column(db.DateTime, nullable=False, index=True)  # naive UTC
-    revoked_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = db.Column(UtcDateTime, nullable=False, index=True)  # naive UTC
+    revoked_at = db.Column(UtcDateTime, nullable=False, default=datetime.utcnow)

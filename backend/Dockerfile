@@ -46,7 +46,7 @@ RUN --mount=type=bind,from=builder,source=/wheels,target=/wheels \
     # fail the build now (not at 3am) if a native library is missing
     # (face_recognition_models is only located, not imported: it needs
     # pkg_resources, which the app shims at runtime - app/vision/_pkg_resources_compat.py)
-    && python -c "import importlib.util, dlib, cv2, numpy, psycopg2, eventlet; assert importlib.util.find_spec('face_recognition_models'); print('native libs ok')"
+    && python -c "import importlib.util, dlib, cv2, numpy, pymysql, eventlet; assert importlib.util.find_spec('face_recognition_models'); print('native libs ok')"
 
 # Application code stays root-owned (read-only for the app user); only the
 # log directory is writable.

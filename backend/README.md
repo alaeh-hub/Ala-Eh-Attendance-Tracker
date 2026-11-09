@@ -1,6 +1,6 @@
 # Attendance System — Backend (Flask)
 
-## Local dev (SQLite, no Docker)
+## Local dev (MySQL)
 
 ```powershell
 py -m venv .venv
@@ -9,10 +9,16 @@ pip install -r requirements.txt
 python run.py
 ```
 
-Runs on http://localhost:5000 using `instance/attendance.db`. Older
-databases are upgraded in place on startup (`app/schema_upgrade.py`).
+Runs on http://localhost:5000 against the MySQL named by `DATABASE_URL`
+(default `mysql+pymysql://attendance:attendance-dev@127.0.0.1:3306/attendance`;
+create it as shown in the top-level README). Older databases are upgraded in
+place on startup (`app/schema_upgrade.py`).
 
-Run the tests: `python -m unittest tests.test_recognition_routes`
+Run the tests: `python -m pytest tests -q`. They use in-memory SQLite, except
+`tests/test_mysql_integration.py`, which runs only when `TEST_MYSQL_URL` points
+at a MySQL schema whose name ends in `_test` (it is dropped and recreated):
+
+    TEST_MYSQL_URL=mysql+pymysql://root:PASSWORD@127.0.0.1:3306/attendance_test python -m pytest tests/test_mysql_integration.py
 
 ## Architecture
 

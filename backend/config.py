@@ -16,6 +16,39 @@ def _bool(name: str, default: bool) -> bool:
     return os.environ.get(name, str(default)).strip().lower() in ("1", "true", "yes", "on")
 
 
+# The local development database: the MySQL the docker-compose.dev.yml stack publishes on
+# 127.0.0.1:3306 (user and schema "attendance"). Anything else comes from DATABASE_URL.
+DEFAULT_DATABASE_URL = "mysql+pymysql://attendance:attendance-dev@127.0.0.1:3306/attendance"
+
+
+def database_uri(url: str) -> str:
+    """The configured database URL, made safe for MySQL.
+
+    A bare ``mysql://`` means the PyMySQL driver (the one in requirements.txt), and a
+    MySQL URL without a charset gets utf8mb4: MySQL's own default ("utf8") is the
+    3-byte subset that cannot store every character in an employee's name.
+    """
+    if url.startswith("mysql://"):
+        url = "mysql+pymysql://" + url[len("mysql://"):]
+    if url.startswith(("mysql+pymysql://", "mysql+mysqldb://", "mysql+mysqlconnector://")) and "charset=" not in url:
+        url += ("&" if "?" in url else "?") + "charset=utf8mb4"
+    return url
+
+
+def engine_options(url: str) -> dict:
+    options = {
+        "pool_pre_ping": True,   # a connection the server dropped is replaced, not surfaced as a 500
+        "pool_recycle": 1800,    # stay under MySQL's wait_timeout and any proxy idle timeout
+    }
+    if url.startswith("mysql"):
+        # MySQL defaults to REPEATABLE READ, PostgreSQL to READ COMMITTED. The punch lock re-reads
+        # the employee's latest event AFTER taking the row lock; under REPEATABLE READ that read can
+        # come from a snapshot taken earlier in the request and miss a punch committed while it
+        # waited, which would let a double scan through. READ COMMITTED always sees the latest.
+        options["isolation_level"] = "READ COMMITTED"
+    return options
+
+
 def _float_or_none(name: str):
     value = os.environ.get(name)
     return float(value) if value not in (None, "") else None
@@ -24,8 +57,8 @@ def _float_or_none(name: str):
 class Config:
     """
     Central configuration. All values are overridable via environment
-    variables so the same codebase runs in dev (SQLite) and production
-    (Postgres via Docker Compose) without code changes.
+    variables so the same codebase runs in dev and production (MySQL, via
+    Docker Compose in both) without code changes.
     """
     # "production" makes unsafe settings (placeholder secrets, no FACE_DATA_KEY,
     # SQLite) a startup error instead of a warning. See app/config_check.py.
@@ -64,9 +97,10 @@ class Config:
     # development; production runs Alembic migrations (manage_db.py) instead.
     AUTO_CREATE_SCHEMA = _bool("AUTO_CREATE_SCHEMA", APP_ENV != "production")
 
-    # Default to SQLite for zero-setup local dev. Swap DATABASE_URL to a
-    # postgres:// URI (see docker-compose.yml) for the production stack.
-    SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URL", "sqlite:///attendance.db")
+    # MySQL everywhere (see docker-compose.yml / docker-compose.dev.yml). SQLite is still accepted
+    # when DATABASE_URL names it explicitly - the test suite does - but production refuses it.
+    SQLALCHEMY_DATABASE_URI = database_uri(os.environ.get("DATABASE_URL") or DEFAULT_DATABASE_URL)
+    # SQLALCHEMY_ENGINE_OPTIONS is derived from the effective URL in create_app (see engine_options).
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     CORS_ORIGINS = [origin.strip() for origin in os.environ.get(
         "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
@@ -175,6 +209,8 @@ class Config:
     OFFLOAD_RECOGNITION = _bool("OFFLOAD_RECOGNITION", True)
 
     # --- Logging ---
+    # Load the face models and the enrolled-face index when the server starts (app/warmup.py).
+    WARM_UP = _bool("WARM_UP", True)
     LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
     LOG_DIR = os.environ.get("LOG_DIR") or os.path.join(os.path.dirname(__file__), "logs")
 

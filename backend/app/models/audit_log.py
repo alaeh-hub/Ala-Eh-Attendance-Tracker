@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from app.extensions import db
+from app.models.types import LongText, UtcDateTime
 
 
 class AuditLog(db.Model):
@@ -11,8 +12,8 @@ class AuditLog(db.Model):
     action = db.Column(db.String(80), nullable=False)  # e.g. "USER_CREATED", "ATTENDANCE_CORRECTED"
     target_type = db.Column(db.String(40), nullable=True)
     target_id = db.Column(db.String(36), nullable=True)
-    details = db.Column(db.Text, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    details = db.Column(LongText, nullable=True)
+    created_at = db.Column(UtcDateTime, default=datetime.utcnow)
 
     def to_dict(self):
         return {

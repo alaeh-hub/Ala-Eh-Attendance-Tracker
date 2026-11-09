@@ -2,7 +2,8 @@
 Minimal forward-only schema upgrade for databases created before the
 employee-profile columns existed. db.create_all() never alters existing
 tables, so without this an old attendance.db would crash on startup.
-ALTER TABLE ... ADD COLUMN works the same on SQLite and Postgres.
+ALTER TABLE ... ADD COLUMN works on SQLite, PostgreSQL and MySQL; only the
+column type names differ (see _DIALECT_TYPES).
 
 Production uses Alembic (manage_db.py); this only keeps development
 databases (AUTO_CREATE_SCHEMA) current. Migrations after the baseline
@@ -19,9 +20,9 @@ _NEW_COLUMNS = {
         "department": "VARCHAR(80)",
         "position": "VARCHAR(80)",
         "phone": "VARCHAR(40)",
-        "photo": "BYTEA",  # rewritten to BLOB for SQLite below
-        "updated_at": "TIMESTAMP",
-        "biometric_consent_at": "TIMESTAMP",
+        "photo": "BINARY",  # rewritten per dialect below
+        "updated_at": "DATETIME",
+        "biometric_consent_at": "DATETIME",
         "biometric_consent_by": "VARCHAR(36)",
     },
     "face_embeddings": {
@@ -42,9 +43,26 @@ _NEW_COLUMNS = {
 }
 
 
+# The generic names above, per database. MySQL's TIMESTAMP is not a plain datetime
+# (2038 limit, implicit auto-update), so DATETIME(6) is used, as app/models/types.py does.
+_DIALECT_TYPES = {
+    "sqlite": {"BINARY": "BLOB", "DATETIME": "TIMESTAMP"},
+    "postgresql": {"BINARY": "BYTEA", "DATETIME": "TIMESTAMP"},
+    "mysql": {"BINARY": "LONGBLOB", "DATETIME": "DATETIME(6)"},
+    "mariadb": {"BINARY": "LONGBLOB", "DATETIME": "DATETIME(6)"},
+}
+
+
+def _create_index(conn, inspector, table: str, name: str, column: str, unique: bool = False) -> None:
+    """CREATE INDEX only if missing (MySQL has no IF NOT EXISTS for indexes)."""
+    if not inspector.has_table(table) or name in {i["name"] for i in inspector.get_indexes(table)}:
+        return
+    conn.execute(text(f"CREATE {'UNIQUE ' if unique else ''}INDEX {name} ON {table} ({column})"))
+
+
 def upgrade_schema():
     inspector = inspect(db.engine)
-    is_sqlite = db.engine.dialect.name == "sqlite"
+    types = _DIALECT_TYPES.get(db.engine.dialect.name, _DIALECT_TYPES["postgresql"])
     with db.engine.begin() as conn:
         for table, columns in _NEW_COLUMNS.items():
             if not inspector.has_table(table):
@@ -53,19 +71,17 @@ def upgrade_schema():
             for name, ddl_type in columns.items():
                 if name in existing:
                     continue
-                if is_sqlite and ddl_type == "BYTEA":
-                    ddl_type = "BLOB"
+                ddl_type = types.get(ddl_type, ddl_type)
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl_type}"))
                 if table == "attendance_events" and name == "session":
                     _backfill_session(conn)
                 if table == "departments" and name in ("break_start", "break_end"):
                     default = "12:00" if name == "break_start" else "13:00"
                     conn.execute(text(f"UPDATE departments SET {name} = :v WHERE {name} IS NULL"), {"v": default})
-        indexes = {i["name"] for i in inspector.get_indexes("users")}
-        if "ix_users_employee_code" not in indexes:
-            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_employee_code ON users (employee_code)"))
-        if inspector.has_table("attendance_events"):
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_attendance_events_work_date ON attendance_events (work_date)"))
+        # The inspector was taken before the columns above existed; indexes need fresh metadata.
+        fresh = inspect(conn)
+        _create_index(conn, fresh, "users", "ix_users_employee_code", "employee_code", unique=True)
+        _create_index(conn, fresh, "attendance_events", "ix_attendance_events_work_date", "work_date")
 
 
 def _backfill_session(conn):

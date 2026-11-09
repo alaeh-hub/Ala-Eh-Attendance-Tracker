@@ -51,7 +51,7 @@ def config_problems(cfg) -> list[str]:
         problems.append("FACE_DATA_KEY is not a valid Fernet key (urlsafe base64, 32 bytes).")
 
     if str(cfg.get("SQLALCHEMY_DATABASE_URI", "")).startswith("sqlite"):
-        problems.append("DATABASE_URL points at SQLite. Use PostgreSQL in production.")
+        problems.append("DATABASE_URL points at SQLite. Use MySQL in production.")
     return problems
 
 

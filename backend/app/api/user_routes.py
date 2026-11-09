@@ -213,7 +213,6 @@ def get_user(user_id):
 @user_bp.get("/<user_id>/photo")
 @require_roles("ADMIN", "OPERATOR", allow_kiosk=True)  # kiosk shows a matched employee's photo
 def get_photo(user_id):
-    caller = load_current_user()
     user = db.session.get(User, user_id)
     if not user or user.photo is None:
         raise AppError("No photo.", 404)
@@ -224,28 +223,13 @@ def get_photo(user_id):
     return Response(photo, mimetype="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
 
 
-@user_bp.patch("/<user_id>")
-@require_roles("ADMIN")
-def update_user(user_id):
-    """
-    Update profile, password, sign-in access, active state and role in one
-    request. Anything that changes what the account may do (password, sign-in
-    revoked, deactivation, role) also bumps token_version, signing the user
-    out everywhere on their next request.
-    """
-    caller = load_current_user()
-    user = db.session.get(User, user_id)
-    if not user:
-        raise AppError("Employee not found.", 404)
+def _require_bool(data: dict, key: str) -> None:
+    if not isinstance(data[key], bool):
+        raise AppError(f"{key} must be a boolean.", 400)
 
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        raise AppError("A JSON object is required.", 400)
-    is_self = user.id == caller.id
-    before = {f: getattr(user, f) for f in ("full_name", "email", "employee_code", *PROFILE_FIELDS)}
-    changes: dict = {}
-    revoke = False
 
+def _apply_profile(user: User, data: dict) -> None:
+    """Name, email, employee code and the free-text profile fields."""
     if "full_name" in data:
         name = _clean(data["full_name"], 120)
         if not name:
@@ -268,50 +252,88 @@ def update_user(user_id):
         if field in data:
             setattr(user, field, _department_name(data[field]) if field == "department" else _clean(data[field], n))
 
-    if "password" in data and data["password"]:
+
+def _apply_credentials(user: User, data: dict, is_self: bool) -> tuple[dict, bool]:
+    """Set a new password or revoke sign-in. Returns (audit details, whether
+    the user's tokens must be revoked). The password value is never audited."""
+    if data.get("password"):
         if not is_valid_password(data["password"]):
             raise AppError(PASSWORD_RULE, 400)
         user.password_hash = hash_password(data["password"])
-        changes["password_changed"] = True  # never the value
-        revoke = True
-    elif "revoke_login" in data and not isinstance(data["revoke_login"], bool):
-        raise AppError("revoke_login must be a boolean.", 400)
-    elif data.get("revoke_login") is True:
+        return {"password_changed": True}, True
+    if "revoke_login" in data:
+        _require_bool(data, "revoke_login")
+    if data.get("revoke_login") is True:
         if is_self:
             raise AppError("You can't revoke your own sign-in access.", 400)
         user.password_hash = NO_LOGIN_HASH
-        changes["login_revoked"] = True
-        revoke = True
+        return {"login_revoked": True}, True
+    return {}, False
 
-    status_action = None
-    if "is_active" in data:
-        if not isinstance(data["is_active"], bool):
-            raise AppError("is_active must be a boolean.", 400)
-        deactivating = not data["is_active"]
-        if deactivating and is_self:
-            raise AppError("You can't deactivate your own account.", 400)
-        if deactivating and user.role == "ADMIN" and _remaining_admins(user.id) == 0:
-            raise AppError("Can't deactivate the last active admin.", 400)
-        if user.is_active != data["is_active"]:
-            status_action = "USER_REACTIVATED" if data["is_active"] else "USER_DEACTIVATED"
-            revoke = revoke or deactivating
-        user.is_active = data["is_active"]
-        embedding_index.invalidate()  # deactivated employees can't be matched
 
-    role_change = None
-    if "role" in data:
-        if data["role"] not in ROLES:
-            raise AppError("Invalid role.", 400)
-        if is_self and data["role"] != "ADMIN":
-            raise AppError("You can't remove your own admin role.", 400)
-        if user.role == "ADMIN" and data["role"] != "ADMIN" and _remaining_admins(user.id) == 0:
-            raise AppError("Can't demote the last active admin.", 400)
-        if data["role"] in LOGIN_ROLES and not user.can_login:
-            raise AppError("Set a password before granting admin, operator or kiosk access.", 400)
-        if data["role"] != user.role:
-            role_change = {"from": user.role, "to": data["role"]}
-            revoke = True
-        user.role = data["role"]
+def _apply_active_state(user: User, data: dict, is_self: bool) -> tuple[str | None, bool]:
+    """Activate or deactivate. Returns (audit action if the state changed,
+    whether the user's tokens must be revoked)."""
+    if "is_active" not in data:
+        return None, False
+    _require_bool(data, "is_active")
+    active = data["is_active"]
+    deactivating = not active
+    if deactivating and is_self:
+        raise AppError("You can't deactivate your own account.", 400)
+    if deactivating and user.role == "ADMIN" and _remaining_admins(user.id) == 0:
+        raise AppError("Can't deactivate the last active admin.", 400)
+    action = None
+    if user.is_active != active:
+        action = "USER_REACTIVATED" if active else "USER_DEACTIVATED"
+    user.is_active = active
+    embedding_index.invalidate()  # deactivated employees can't be matched
+    return action, deactivating and action is not None
+
+
+def _apply_role(user: User, data: dict, is_self: bool) -> dict | None:
+    """Change the role. Returns {"from", "to"} when it actually changed."""
+    if "role" not in data:
+        return None
+    role = data["role"]
+    if role not in ROLES:
+        raise AppError("Invalid role.", 400)
+    if is_self and role != "ADMIN":
+        raise AppError("You can't remove your own admin role.", 400)
+    if user.role == "ADMIN" and role != "ADMIN" and _remaining_admins(user.id) == 0:
+        raise AppError("Can't demote the last active admin.", 400)
+    if role in LOGIN_ROLES and not user.can_login:
+        raise AppError("Set a password before granting admin, operator or kiosk access.", 400)
+    change = {"from": user.role, "to": role} if role != user.role else None
+    user.role = role
+    return change
+
+
+@user_bp.patch("/<user_id>")
+@require_roles("ADMIN")
+def update_user(user_id):
+    """
+    Update profile, password, sign-in access, active state and role in one
+    request. Anything that changes what the account may do (password, sign-in
+    revoked, deactivation, role) also bumps token_version, signing the user
+    out everywhere on their next request.
+    """
+    caller = load_current_user()
+    user = db.session.get(User, user_id)
+    if not user:
+        raise AppError("Employee not found.", 404)
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        raise AppError("A JSON object is required.", 400)
+    is_self = user.id == caller.id
+    before = {f: getattr(user, f) for f in ("full_name", "email", "employee_code", *PROFILE_FIELDS)}
+
+    _apply_profile(user, data)
+    changes, revoke = _apply_credentials(user, data, is_self)
+    status_action, revoke_for_status = _apply_active_state(user, data, is_self)
+    role_change = _apply_role(user, data, is_self)
+    revoke = revoke or revoke_for_status or role_change is not None
 
     # Checked once everything is applied, so one request may both revoke
     # sign-in and demote to STAFF, but never leave an admin, operator or

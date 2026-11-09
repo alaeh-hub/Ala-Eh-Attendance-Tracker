@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from app.extensions import db
+from app.models.types import UtcDateTime
 from app.models.user import iso_utc
 
 
@@ -18,7 +19,7 @@ class AttendanceEvent(db.Model):
     # (AM in, AM out for lunch, PM in, PM out) plus an optional OT in/out pair.
     session = db.Column(db.String(2), nullable=False, default="AM")
     # Naive UTC.
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    timestamp = db.Column(UtcDateTime, default=datetime.utcnow, index=True)
 
     match_score = db.Column(db.Float, nullable=False)
     match_status = db.Column(db.String(20), nullable=False)  # MATCHED | MANUAL

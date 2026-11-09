@@ -17,6 +17,13 @@ Create Date: 2026-10-14 13:17:03.258052
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import mysql
+
+# Same column types as app/models/types.py. MySQL's plain BLOB (64 KB), DATETIME
+# (no fractional seconds) and TEXT (64 KB) are too small / coarse for this schema.
+_DATETIME = sa.DateTime().with_variant(mysql.DATETIME(fsp=6), 'mysql')
+_BLOB = sa.LargeBinary().with_variant(mysql.LONGBLOB(), 'mysql')
+_TEXT = sa.Text().with_variant(mysql.MEDIUMTEXT(), 'mysql')
 
 
 # revision identifiers, used by Alembic.
@@ -55,8 +62,8 @@ def upgrade():
         sa.Column('jti', sa.String(length=36), nullable=False),
         sa.Column('token_type', sa.String(length=10), nullable=False),
         sa.Column('user_id', sa.String(length=36), nullable=True),
-        sa.Column('expires_at', sa.DateTime(), nullable=False),
-        sa.Column('revoked_at', sa.DateTime(), nullable=False),
+        sa.Column('expires_at', _DATETIME, nullable=False),
+        sa.Column('revoked_at', _DATETIME, nullable=False),
         sa.PrimaryKeyConstraint('jti')
         )
     token_indexes = indexes('revoked_tokens') if 'revoked_tokens' in tables else set()

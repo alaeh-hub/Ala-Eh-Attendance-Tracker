@@ -20,7 +20,7 @@ GOOD = {
     "SECRET_KEY": "k" * 40,
     "JWT_SECRET_KEY": "j" * 40,
     "FACE_DATA_KEY": Fernet.generate_key().decode(),
-    "SQLALCHEMY_DATABASE_URI": "postgresql://u:p@db/x",
+    "SQLALCHEMY_DATABASE_URI": "mysql+pymysql://u:p@db/x",
 }
 
 
@@ -63,14 +63,14 @@ class ConfigCheckTests(unittest.TestCase):
         self.assertNotIn("SECRET_KEY", str(ctx.exception))
 
     def test_production_auto_spoof_mode_fails_closed_without_model(self):
-        class SafePostgres(Config):
+        class SafeMysql(Config):
             APP_ENV = "production"
             SECRET_KEY, JWT_SECRET_KEY, FACE_DATA_KEY = GOOD["SECRET_KEY"], GOOD["JWT_SECRET_KEY"], GOOD["FACE_DATA_KEY"]
             SQLALCHEMY_DATABASE_URI = GOOD["SQLALCHEMY_DATABASE_URI"]
             SPOOF_MODE = "auto"
         with patch("app.vision.antispoof.get_antispoof", return_value=SimpleNamespace(has_model=False)):
             with self.assertRaises(InsecureConfigError) as ctx:
-                create_app(SafePostgres)
+                create_app(SafeMysql)
         self.assertIn("MiniFASNet", str(ctx.exception))
 
     def test_development_only_warns(self):
@@ -85,7 +85,7 @@ class GenerateSecretsTests(unittest.TestCase):
     def test_generated_values_pass_the_production_check(self):
         v = generate_secrets.generate()
         cfg = {"SECRET_KEY": v["secret_key"], "JWT_SECRET_KEY": v["jwt_key"], "FACE_DATA_KEY": v["face_key"],
-               "SQLALCHEMY_DATABASE_URI": f"postgresql://attendance:{v['db_password']}@db/attendance"}
+               "SQLALCHEMY_DATABASE_URI": f"mysql+pymysql://attendance:{v['db_password']}@db/attendance"}
         self.assertEqual(config_problems(cfg), [])
         self.assertNotEqual(v["secret_key"], v["jwt_key"])
 
@@ -100,7 +100,7 @@ class GenerateSecretsTests(unittest.TestCase):
 
 class MigrationTests(unittest.TestCase):
     def test_copies_every_row_and_refuses_a_non_empty_target(self):
-        import migrate_to_postgres
+        import migrate_to_mysql
         from app.extensions import db
         from app.models.face_embedding import FaceEmbedding
         from app.models.user import User
@@ -126,7 +126,7 @@ class MigrationTests(unittest.TestCase):
                 db.session.remove()
                 db.engine.dispose()
 
-            counts = migrate_to_postgres.migrate(f"sqlite:///{src}", f"sqlite:///{dst}")
+            counts = migrate_to_mysql.migrate(f"sqlite:///{src}", f"sqlite:///{dst}")
             self.assertEqual(counts["users"], 1)
             self.assertEqual(counts["face_embeddings"], 1)
             conn = sqlite3.connect(dst)
@@ -137,7 +137,7 @@ class MigrationTests(unittest.TestCase):
                 conn.close()   # sqlite3's context manager commits but does not close; Windows then can't delete the file
 
             with self.assertRaises(SystemExit):
-                migrate_to_postgres.migrate(f"sqlite:///{src}", f"sqlite:///{dst}")
+                migrate_to_mysql.migrate(f"sqlite:///{src}", f"sqlite:///{dst}")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from app.extensions import db
+from app.models.types import Blob, UtcDateTime
 
 
 def iso_utc(value: datetime | None) -> str | None:
@@ -32,11 +33,11 @@ class User(db.Model):
     position = db.Column(db.String(80), nullable=True)
     phone = db.Column(db.String(40), nullable=True)
     # Small JPEG face thumbnail taken from the best frontal enrollment sample.
-    photo = db.Column(db.LargeBinary, nullable=True)
+    photo = db.Column(Blob, nullable=True)
 
     # Biometric consent: when an admin recorded that the employee agreed to
     # have their face enrolled, and who recorded it.
-    biometric_consent_at = db.Column(db.DateTime, nullable=True)
+    biometric_consent_at = db.Column(UtcDateTime, nullable=True)
     biometric_consent_by = db.Column(db.String(36), nullable=True)
 
     is_active = db.Column(db.Boolean, default=True, nullable=False)
@@ -44,8 +45,8 @@ class User(db.Model):
     # sign-in revoked, deactivation, role change, archive) invalidates every
     # token issued before, without tracking them individually.
     token_version = db.Column(db.Integer, nullable=False, default=0, server_default="0")
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(UtcDateTime, default=datetime.utcnow)
+    updated_at = db.Column(UtcDateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     embeddings = db.relationship("FaceEmbedding", backref="user", cascade="all, delete-orphan")
     # Attendance is a payroll record and must outlive the account: deleting a

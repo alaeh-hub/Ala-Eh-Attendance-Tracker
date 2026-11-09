@@ -1,4 +1,4 @@
-﻿"""
+"""
 Best-effort 2D pose estimate from the 5 YuNet landmarks (right eye, left
 eye, nose, mouth right, mouth left). This is a geometric heuristic, not a
 3D head-pose model.

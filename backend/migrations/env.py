@@ -98,7 +98,7 @@ def run_migrations_online():
 
     with connectable.connect() as connection:
         # SQLite can't ALTER most columns in place; batch mode copies the
-        # table instead. Postgres (production) uses plain ALTER TABLE.
+        # table instead. MySQL and PostgreSQL (production) use plain ALTER TABLE.
         conf_args.setdefault("render_as_batch", connection.dialect.name == "sqlite")
         conf_args.setdefault("compare_type", True)
         context.configure(

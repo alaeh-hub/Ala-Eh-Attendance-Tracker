@@ -182,17 +182,6 @@ body::before {
 .spot-card:hover::before { opacity: 1; }
 .spot-card > * { position: relative; }
 
-.flip-text { perspective: 800px; }
-.flip-char {
-  display: inline-block;
-  transform-origin: 50% 100%;
-  animation: flip-in var(--flip-dur, 0.9s) var(--ease-out) var(--flip-delay, 0s) var(--flip-n, 1) both;
-}
-@keyframes flip-in {
-  from { opacity: 0; transform: rotateX(-90deg) translateY(0.25em); }
-  to { opacity: 1; transform: none; }
-}
-
 .kl { position: relative; display: inline-flex; padding-bottom: var(--space-md); font-size: 2.5rem; font-weight: 700; letter-spacing: 0.04em; color: var(--color-ink); }
 .kl-letter { display: inline-block; transform-origin: 50% 100%; animation: kl-in 700ms var(--ease-out) both; }
 @keyframes kl-in {

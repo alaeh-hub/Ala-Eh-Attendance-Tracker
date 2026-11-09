@@ -1,11 +1,11 @@
 """
-Copy every table from the dev SQLite database into PostgreSQL (or any
-SQLAlchemy URL), keeping ids and timestamps.
+Copy every table from a SQLite database (or any SQLAlchemy URL) into MySQL,
+keeping ids and timestamps.
 
     cd backend
-    .venv\\Scripts\\python tools\\migrate_to_postgres.py ^
+    .venv\\Scripts\\python tools\\migrate_to_mysql.py ^
         --source sqlite:///instance/attendance.db ^
-        --target postgresql+psycopg2://attendance:PASSWORD@localhost:5432/attendance
+        --target mysql+pymysql://attendance:PASSWORD@localhost:3306/attendance
 
 The target must be empty (the script creates the tables and refuses to
 copy into one that already has users). The source is only read. Back up
@@ -20,13 +20,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import create_engine, func, select  # noqa: E402
 
+from config import database_uri  # noqa: E402
+
 
 def migrate(source_url: str, target_url: str, batch: int = 500) -> dict:
     # Import models so every table is registered on the metadata.
     from app.extensions import db
     from app import models  # noqa: F401
 
-    source, target = create_engine(source_url), create_engine(target_url)
+    source, target = create_engine(database_uri(source_url)), create_engine(database_uri(target_url))
     try:
         return _copy(source, target, db.metadata, batch)
     finally:

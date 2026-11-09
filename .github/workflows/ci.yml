@@ -22,17 +22,18 @@ jobs:
       run:
         working-directory: backend
     services:
-      postgres:
-        image: postgres:16.10-alpine
+      mysql:
+        image: mysql:8.4.6
         env:
-          POSTGRES_USER: attendance
-          POSTGRES_PASSWORD: attendance-ci
-          POSTGRES_DB: attendance
+          MYSQL_ROOT_PASSWORD: attendance-ci-root
+          MYSQL_DATABASE: attendance
+          MYSQL_USER: attendance
+          MYSQL_PASSWORD: attendance-ci
         ports:
-          - 5432:5432
+          - 3306:3306
         options: >-
-          --health-cmd "pg_isready -U attendance -d attendance"
-          --health-interval 5s --health-timeout 3s --health-retries 10
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uattendance -pattendance-ci --silent"
+          --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4
 
@@ -54,17 +55,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest
 
+      # The suite runs on in-memory SQLite, except tests/test_mysql_integration.py,
+      # which needs the MySQL service (its schema name must end in _test).
       - name: Run tests
         env:
           APP_ENV: development
+          TEST_MYSQL_URL: mysql+pymysql://root:attendance-ci-root@127.0.0.1:3306/attendance_test
         run: python -m pytest tests -q
 
       # Same engine as production: applies every migration to an empty
-      # PostgreSQL and fails if the models have changes with no migration.
+      # MySQL and fails if the models have changes with no migration.
       - name: Migrations apply cleanly and match the models
         env:
           APP_ENV: development
-          DATABASE_URL: postgresql+psycopg2://attendance:attendance-ci@localhost:5432/attendance
+          DATABASE_URL: mysql+pymysql://attendance:attendance-ci@127.0.0.1:3306/attendance?charset=utf8mb4
         run: python manage_db.py check
 
       - name: Dependency vulnerability audit (advisory)

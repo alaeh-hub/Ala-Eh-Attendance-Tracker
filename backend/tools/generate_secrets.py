@@ -23,9 +23,11 @@ SECRET_KEY={secret_key}
 JWT_SECRET_KEY={jwt_key}
 FACE_DATA_KEY={face_key}
 
-# PostgreSQL (docker-compose reads POSTGRES_PASSWORD from the same value)
-POSTGRES_PASSWORD={db_password}
-DATABASE_URL=postgresql+psycopg2://attendance:{db_password}@db:5432/attendance
+# MySQL (docker-compose hands these to the db service and the backup job; keep the
+# app password in DATABASE_URL identical to MYSQL_PASSWORD)
+MYSQL_ROOT_PASSWORD={db_root_password}
+MYSQL_PASSWORD={db_password}
+DATABASE_URL=mysql+pymysql://attendance:{db_password}@db:3306/attendance?charset=utf8mb4
 
 # Public address of the site (served same-origin through Caddy). Replace
 # the placeholder with your real https:// origin(s), comma separated.
@@ -57,6 +59,7 @@ def generate() -> dict:
         "face_key": Fernet.generate_key().decode(),
         # URL-safe alphabet only: the value is embedded in DATABASE_URL.
         "db_password": secrets.token_urlsafe(24),
+        "db_root_password": secrets.token_urlsafe(24),
     }
 
 

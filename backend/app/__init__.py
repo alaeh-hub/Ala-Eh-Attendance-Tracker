@@ -1,7 +1,7 @@
 from flask import Flask, jsonify
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
-from config import CONFIG
+from config import CONFIG, engine_options
 from app import config_check
 from app.extensions import db, migrate, jwt, cors, socketio
 from app.logging_config import configure_logging, register_request_logging
@@ -11,6 +11,8 @@ from app.middleware.error_handler import register_error_handlers
 def create_app(config_object=CONFIG):
     app = Flask(__name__)
     app.config.from_object(config_object)
+    # Per-database connection options follow the URL actually in use (a test config may swap it).
+    app.config.setdefault("SQLALCHEMY_ENGINE_OPTIONS", engine_options(app.config["SQLALCHEMY_DATABASE_URI"]))
 
     configure_logging(app)
     config_check.enforce(app)

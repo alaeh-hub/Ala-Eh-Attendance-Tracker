@@ -81,7 +81,7 @@ def _hhmm(value: str) -> tuple[int, int]:
     return int(hh), int(mm)
 
 
-def _minutes(value: str) -> int:
+def minutes_of_day(value: str) -> int:
     hh, mm = _hhmm(value)
     return hh * 60 + mm
 
@@ -89,12 +89,12 @@ def _minutes(value: str) -> int:
 def _span_minutes(start: str, end: str) -> int:
     """Length of start->end in minutes, wrapping past midnight. end == start
     is read as a full 24 hours rather than zero."""
-    return (_minutes(end) - _minutes(start)) % 1440 or 1440
+    return (minutes_of_day(end) - minutes_of_day(start)) % 1440 or 1440
 
 
 def is_overnight(start: str | None, end: str | None) -> bool:
     """A schedule ends on the next calendar day when its end is not after its start."""
-    return bool(start and end) and _minutes(end) <= _minutes(start)
+    return bool(start and end) and minutes_of_day(end) <= minutes_of_day(start)
 
 
 def _pretty(hhmm: str) -> str:
@@ -133,7 +133,7 @@ def rollover_minutes(start: str | None, end: str | None) -> int:
     if not start:
         return 0
     buffer = int(_cfg_number("WORKDAY_ROLLOVER_BUFFER_HOURS", DEFAULT_ROLLOVER_BUFFER_HOURS) * 60)
-    s = _minutes(start)
+    s = minutes_of_day(start)
     if is_overnight(start, end) or s < buffer:
         return s - buffer
     return 0
@@ -193,7 +193,7 @@ class WorkDay:
 
     def at(self, hhmm: str) -> datetime:
         """"HH:MM" as the org-local datetime it falls on inside this work day."""
-        offset = (_minutes(hhmm) - self.rollover) % 1440 + self.rollover
+        offset = (minutes_of_day(hhmm) - self.rollover) % 1440 + self.rollover
         return self._midnight + timedelta(minutes=offset)
 
     # -- schedule ---------------------------------------------------------
@@ -704,7 +704,7 @@ def _record_attendance(user_id: str, match_score: float, match_status: str,
                        event_type: str | None = None, session: str | None = None,
                        timestamp: datetime | None = None,
                        notes: str | None = None, enforce_cooldown: bool = True) -> AttendanceEvent:
-    # PostgreSQL locks this employee row until commit. Concurrent scans for
+    # MySQL (InnoDB) and PostgreSQL lock this employee row until commit. Concurrent scans for
     # the same employee then re-check the latest event sequentially, avoiding
     # duplicate events that can pass a check-then-insert cooldown race.
     user = User.query.filter_by(id=user_id).with_for_update().first() if enforce_cooldown else db.session.get(User, user_id)
@@ -830,7 +830,7 @@ def record_attendance(user_id: str, match_score: float, match_status: str,
                       notes: str | None = None, enforce_cooldown: bool = True) -> AttendanceEvent:
     """Serialize SQLite check-then-write operations within the server process.
 
-    SQLite ignores SELECT FOR UPDATE, unlike PostgreSQL. The application is
+    SQLite ignores SELECT FOR UPDATE, unlike MySQL and PostgreSQL. The application is
     configured for one worker, so this lock closes the threaded kiosk race.
     """
     if db.engine.dialect.name == "sqlite" and enforce_cooldown:

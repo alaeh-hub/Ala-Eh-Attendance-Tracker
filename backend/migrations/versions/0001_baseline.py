@@ -7,6 +7,13 @@ Create Date: 2026-10-14 08:58:19.486471
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import mysql
+
+# Same column types as app/models/types.py. MySQL's plain BLOB (64 KB), DATETIME
+# (no fractional seconds) and TEXT (64 KB) are too small / coarse for this schema.
+_DATETIME = sa.DateTime().with_variant(mysql.DATETIME(fsp=6), 'mysql')
+_BLOB = sa.LargeBinary().with_variant(mysql.LONGBLOB(), 'mysql')
+_TEXT = sa.Text().with_variant(mysql.MEDIUMTEXT(), 'mysql')
 
 
 # revision identifiers, used by Alembic.
@@ -24,8 +31,8 @@ def upgrade():
     sa.Column('action', sa.String(length=80), nullable=False),
     sa.Column('target_type', sa.String(length=40), nullable=True),
     sa.Column('target_id', sa.String(length=36), nullable=True),
-    sa.Column('details', sa.Text(), nullable=True),
-    sa.Column('created_at', sa.DateTime(), nullable=True),
+    sa.Column('details', _TEXT, nullable=True),
+    sa.Column('created_at', _DATETIME, nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('departments',
@@ -34,12 +41,12 @@ def upgrade():
     sa.Column('start_time', sa.String(length=5), nullable=True),
     sa.Column('end_time', sa.String(length=5), nullable=True),
     sa.Column('has_shifting', sa.Boolean(), nullable=False),
-    sa.Column('shifts_json', sa.Text(), nullable=True),
-    sa.Column('roles_json', sa.Text(), nullable=True),
+    sa.Column('shifts_json', _TEXT, nullable=True),
+    sa.Column('roles_json', _TEXT, nullable=True),
     sa.Column('break_start', sa.String(length=5), nullable=True),
     sa.Column('break_end', sa.String(length=5), nullable=True),
-    sa.Column('created_at', sa.DateTime(), nullable=True),
-    sa.Column('updated_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', _DATETIME, nullable=True),
+    sa.Column('updated_at', _DATETIME, nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     with op.batch_alter_table('departments', schema=None) as batch_op:
@@ -55,12 +62,12 @@ def upgrade():
     sa.Column('department', sa.String(length=80), nullable=True),
     sa.Column('position', sa.String(length=80), nullable=True),
     sa.Column('phone', sa.String(length=40), nullable=True),
-    sa.Column('photo', sa.LargeBinary(), nullable=True),
-    sa.Column('biometric_consent_at', sa.DateTime(), nullable=True),
+    sa.Column('photo', _BLOB, nullable=True),
+    sa.Column('biometric_consent_at', _DATETIME, nullable=True),
     sa.Column('biometric_consent_by', sa.String(length=36), nullable=True),
     sa.Column('is_active', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.DateTime(), nullable=True),
-    sa.Column('updated_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', _DATETIME, nullable=True),
+    sa.Column('updated_at', _DATETIME, nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     with op.batch_alter_table('users', schema=None) as batch_op:
@@ -72,7 +79,7 @@ def upgrade():
     sa.Column('user_id', sa.String(length=36), nullable=False),
     sa.Column('event_type', sa.String(length=10), nullable=False),
     sa.Column('session', sa.String(length=2), nullable=False),
-    sa.Column('timestamp', sa.DateTime(), nullable=True),
+    sa.Column('timestamp', _DATETIME, nullable=True),
     sa.Column('match_score', sa.Float(), nullable=False),
     sa.Column('match_status', sa.String(length=20), nullable=False),
     sa.Column('liveness_passed', sa.Boolean(), nullable=True),
@@ -88,11 +95,11 @@ def upgrade():
     op.create_table('face_embeddings',
     sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('user_id', sa.String(length=36), nullable=False),
-    sa.Column('vector_json', sa.Text(), nullable=False),
+    sa.Column('vector_json', _TEXT, nullable=False),
     sa.Column('pose_label', sa.String(length=30), nullable=True),
     sa.Column('quality_score', sa.Float(), nullable=True),
     sa.Column('model', sa.String(length=20), nullable=True),
-    sa.Column('created_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', _DATETIME, nullable=True),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -110,11 +117,11 @@ def upgrade():
     sa.Column('runner_up_score', sa.Float(), nullable=True),
     sa.Column('spoof_score', sa.Float(), nullable=True),
     sa.Column('device_id', sa.String(length=80), nullable=True),
-    sa.Column('image', sa.LargeBinary(), nullable=False),
+    sa.Column('image', _BLOB, nullable=False),
     sa.Column('resolution', sa.String(length=12), nullable=True),
     sa.Column('reviewed_by', sa.String(length=36), nullable=True),
-    sa.Column('reviewed_at', sa.DateTime(), nullable=True),
-    sa.Column('created_at', sa.DateTime(), nullable=True),
+    sa.Column('reviewed_at', _DATETIME, nullable=True),
+    sa.Column('created_at', _DATETIME, nullable=True),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id')
     )

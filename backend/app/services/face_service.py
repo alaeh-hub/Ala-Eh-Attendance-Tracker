@@ -1,7 +1,6 @@
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-import struct
 import time
 
 import cv2
@@ -15,26 +14,28 @@ from app.models.user import User
 from app.services.embedding_index import active_engine, embedding_index, model_filter
 from app.utils.crypto import encrypt_bytes
 from app.vision.antispoof import default_threshold, get_antispoof, resolve_mode
+from app.vision.debug import add_jaw, detections_debug
 from app.vision.embedding import normalize
 from app.vision.enhance import enhance_for_embedding
 from app.vision.engines import pick_single_face
-from app.vision.liveness import blink_candidate, frame_ear, get_eye_landmark_source
+from app.vision.imaging import (  # noqa: F401 - re-exported: callers and tests import these from here
+    MAX_BURST_PIXELS,
+    MAX_FRAME_PIXELS,
+    MAX_FRAME_WIDTH,
+    decode_image,
+    face_thumbnail,
+    image_dimensions,
+    snapshot_jpeg,
+    validate_burst_pixel_budget,
+)
+from app.vision.liveness import blink_candidate, frame_ear, get_eye_landmark_source, jaw_landmarks
 from app.vision.matcher import classify_match
 from app.vision.pose import assess_pose
 from app.vision.quality import assess_quality
-from app.vision.zone import ENROLL_MIN_FACE_TO_OVAL, MARGIN as ZONE_MARGIN, MOVE_CLOSER, MOVE_INTO_CIRCLE, faces_in_zone, inside_zone, too_small
+from app.vision.tracking import TRACK_MIN_IOU, box_iou as _box_iou, same_track as _same_track  # noqa: F401
+from app.vision.zone import ENROLL_MIN_FACE_TO_OVAL, MOVE_CLOSER, MOVE_INTO_CIRCLE, faces_in_zone, inside_zone, too_small
 
 logger = logging.getLogger("app.enrollment")
-
-# Frames with either dimension larger than this are downscaled on decode;
-# a face at kiosk distance remains large enough for the alignment models.
-MAX_FRAME_WIDTH = 1280
-MAX_FRAME_PIXELS = 20_000_000
-# A check-in keeps each usable decoded frame for face tracking and liveness.
-# Bound the sum before decoding so a burst cannot multiply the per-frame cap
-# into hundreds of megapixels of retained image data.
-MAX_BURST_PIXELS = 32_000_000
-THUMBNAIL_SIZE = 192
 
 
 def setting(name: str):
@@ -43,96 +44,8 @@ def setting(name: str):
     return value if value is not None else active_engine().DEFAULTS[name]
 
 
-def image_dimensions(image_bytes: bytes) -> tuple[int, int]:
-    """Read JPEG/PNG dimensions from the header without allocating an image."""
-    if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
-        raise AppError("Image data is empty or invalid.", 400)
-
-    image_bytes = bytes(image_bytes)
-    width = height = None
-    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n") and len(image_bytes) >= 24:
-        width, height = struct.unpack(">II", image_bytes[16:24])
-    elif image_bytes.startswith(b"\xff\xd8"):
-        # Walk JPEG segments until a start-of-frame marker provides dimensions.
-        offset = 2
-        sof_markers = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
-        while offset + 4 <= len(image_bytes):
-            if image_bytes[offset] != 0xFF:
-                offset += 1
-                continue
-            while offset < len(image_bytes) and image_bytes[offset] == 0xFF:
-                offset += 1
-            if offset >= len(image_bytes):
-                break
-            marker = image_bytes[offset]
-            offset += 1
-            if marker in (0xD8, 0xD9, 0x01) or 0xD0 <= marker <= 0xD7:
-                continue
-            if offset + 2 > len(image_bytes):
-                break
-            segment_length = struct.unpack(">H", image_bytes[offset:offset + 2])[0]
-            if segment_length < 2 or offset + segment_length > len(image_bytes):
-                break
-            if marker in sof_markers and segment_length >= 7:
-                height, width = struct.unpack(">HH", image_bytes[offset + 3:offset + 7])
-                break
-            offset += segment_length
-    else:
-        raise AppError("Only JPEG and PNG images are supported.", 400)
-
-    if not width or not height:
-        raise AppError("Could not read image dimensions.", 400)
-    return width, height
-
-
-def validate_burst_pixel_budget(frames: list[bytes]) -> None:
-    """Reject a burst whose decoded source frames exceed the memory budget."""
-    total_pixels = 0
-    for raw in frames:
-        try:
-            width, height = image_dimensions(raw)
-        except AppError:
-            # Keep the existing behavior: malformed frames are ignored by
-            # recognize_burst, while valid frames still get processed.
-            continue
-        total_pixels += width * height
-        if total_pixels > MAX_BURST_PIXELS:
-            raise AppError("The combined image dimensions are too large.", 413)
-
-
-def decode_image(image_bytes: bytes) -> np.ndarray:
-    """Decode a bounded JPEG/PNG frame, rejecting oversized dimensions before allocation."""
-    width, height = image_dimensions(image_bytes)
-    if width * height > MAX_FRAME_PIXELS:
-        raise AppError("Image dimensions are too large.", 413)
-
-    arr = np.frombuffer(image_bytes, dtype=np.uint8)
-    try:
-        image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    except cv2.error as exc:
-        raise AppError("Could not decode image data.", 400) from exc
-    if image is None:
-        raise AppError("Could not decode image data.", 400)
-    h, w = image.shape[:2]
-    if max(w, h) > MAX_FRAME_WIDTH:
-        scale = MAX_FRAME_WIDTH / float(max(w, h))
-        image = cv2.resize(image, (max(1, int(round(w * scale))), max(1, int(round(h * scale)))),
-                           interpolation=cv2.INTER_AREA)
-    return image
-
-
-def _face_thumbnail(image_bgr: np.ndarray, face_box) -> bytes | None:
-    top, right, bottom, left = face_box
-    h, w = image_bgr.shape[:2]
-    cx, cy = (left + right) / 2, (top + bottom) / 2
-    half = max(bottom - top, right - left) * 0.8
-    x0, y0 = int(max(cx - half, 0)), int(max(cy - half, 0))
-    x1, y1 = int(min(cx + half, w)), int(min(cy + half, h))
-    if x1 <= x0 or y1 <= y0:
-        return None
-    crop = cv2.resize(image_bgr[y0:y1, x0:x1], (THUMBNAIL_SIZE, THUMBNAIL_SIZE), interpolation=cv2.INTER_AREA)
-    ok, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
-    return buf.tobytes() if ok else None
+def _ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)
 
 
 def _current_samples(user_id: str):
@@ -143,14 +56,19 @@ def _current_samples(user_id: str):
     )
 
 
+def _require_user(user_id: str) -> User:
+    user = db.session.get(User, user_id)
+    if not user:
+        raise AppError("Employee not found.", 404)
+    return user
+
+
 # --------------------------------------------------------------------------
 # Enrollment
 # --------------------------------------------------------------------------
 
 def get_enrollment_status(user_id: str) -> dict:
-    user = db.session.get(User, user_id)
-    if not user:
-        raise AppError("Employee not found.", 404)
+    user = _require_user(user_id)
     samples = _current_samples(user.id)
     total = FaceEmbedding.query.filter_by(user_id=user.id).count()
     cfg = current_app.config
@@ -173,9 +91,7 @@ def get_enrollment_status(user_id: str) -> dict:
 
 def reset_enrollment(user_id: str) -> dict:
     """Delete only the specified user's saved face samples and photo."""
-    user = db.session.get(User, user_id)
-    if not user:
-        raise AppError("Employee not found.", 404)
+    user = _require_user(user_id)
     deleted_count = FaceEmbedding.query.filter_by(user_id=user_id).delete(synchronize_session=False)
     user.photo = None
     db.session.commit()
@@ -193,51 +109,11 @@ def reset_all_enrollments() -> dict:
 
 
 # --------------------------------------------------------------------------
-# Development-only detection details
-#
-# The enrollment check and the kiosk check-in can describe what the detector saw (every face
-# with its box and 5 landmarks, the one that was used, the guide oval, quality and pose numbers)
-# so the frontend's debug overlay can draw it. It is for developing the app: a production server
-# never produces it, whatever the client asks for.
+# Development-only detection details (payload builders: app.vision.debug)
 # --------------------------------------------------------------------------
 
 def debug_allowed() -> bool:
     return current_app.config.get("APP_ENV") != "production"
-
-
-def _face_debug(face, chosen) -> dict:
-    top, right, bottom, left = face.box
-    data = {"box": [int(left), int(top), int(right), int(bottom)], "score": round(float(face.score), 3), "chosen": face is chosen}
-    if face.landmarks is not None:
-        data["landmarks"] = [[round(float(x), 1), round(float(y), 1)] for x, y in face.landmarks]
-    return data
-
-
-def _jaw_debug(jaw) -> dict | None:
-    """The jawline (ear to ear) and chin from vision.liveness.jaw_landmarks, as plain JSON numbers."""
-    if jaw is None:
-        return None
-    pts = lambda a: [[round(float(x), 1), round(float(y), 1)] for x, y in a]  # noqa: E731
-    return {"jaw": pts(jaw["jaw"]), "chin": pts([jaw["chin"]])[0], "forehead": pts([jaw["forehead"]])[0]}
-
-
-def _add_jaw(data: dict, jaw) -> None:
-    """Attach the jaw to the chosen face's entry of a debug payload (the only face it is measured for)."""
-    extra = _jaw_debug(jaw)
-    for entry in data.get("faces", []):
-        if entry.get("chosen") and extra:
-            entry.update(extra)
-
-
-def _detections_debug(image, faces, chosen, zone, **extra) -> dict:
-    """What the detector saw in one frame, in that frame's own pixel coordinates."""
-    img_h, img_w = image.shape[:2]
-    return {
-        "image": {"w": int(img_w), "h": int(img_h)},
-        "faces": [_face_debug(f, chosen) for f in faces],
-        "zone": {"cx": zone.cx, "cy": zone.cy, "rx": zone.rx, "ry": zone.ry, "margin": ZONE_MARGIN} if zone else None,
-        **extra,
-    }
 
 
 def detect_for_debug(image_bytes: bytes, zone=None) -> dict:
@@ -261,11 +137,9 @@ def detect_for_debug(image_bytes: bytes, zone=None) -> dict:
         chosen, reason = pick_single_face(candidates, allow_dominant=True)
         if chosen is not None and zone and too_small(zone, chosen.box, img_h):
             chosen, reason = None, MOVE_CLOSER
-    data = _detections_debug(image, faces, chosen, zone, live=True, engine=engine.name, reason=reason, ms=_ms(started))
+    data = detections_debug(image, faces, chosen, zone, live=True, engine=engine.name, reason=reason, ms=_ms(started))
     if chosen is not None and chosen.landmarks is not None:
-        from app.vision.liveness import jaw_landmarks
-
-        _add_jaw(data, jaw_landmarks(image, chosen.landmark_rect()))
+        add_jaw(data, jaw_landmarks(image, chosen.landmark_rect()))
     return data
 
 
@@ -273,12 +147,11 @@ def _enrollment_face(engine, image, zone, debug: dict | None = None):
     """The single face to enrol from a frame, honouring the guide oval:
     faces outside it are ignored, and the face must be big enough for it.
     Returns (face, error message). `debug`, when given, is filled with what was detected."""
-    cfg = current_app.config
-    candidates = engine.detect(image, cfg["DETECTION_WIDTH"])
+    candidates = engine.detect(image, current_app.config["DETECTION_WIDTH"])
     detected = candidates
     img_h, img_w = image.shape[:2]
     if debug is not None:
-        debug.update(_detections_debug(image, detected, None, zone))
+        debug.update(detections_debug(image, detected, None, zone))
     if zone:
         inside = faces_in_zone(zone, candidates, img_w, img_h)
         if candidates and not inside:
@@ -288,10 +161,65 @@ def _enrollment_face(engine, image, zone, debug: dict | None = None):
     if err:
         return None, err
     if debug is not None:
-        debug.update(_detections_debug(image, detected, face, zone))
+        debug.update(detections_debug(image, detected, face, zone))
     if zone and too_small(zone, face.box, img_h, ENROLL_MIN_FACE_TO_OVAL):
         return None, MOVE_CLOSER
     return face, None
+
+
+def _require_consent(user: User, consent: bool, actor_id: str | None) -> None:
+    """Face data is biometric: an admin must confirm the employee agreed
+    before the first sample is stored. Recorded once per employee."""
+    if user.biometric_consent_at is not None:
+        return
+    if not consent:
+        raise AppError("Record the employee's consent before capturing their face.", 428, {"code": "CONSENT_REQUIRED"})
+    user.biometric_consent_at = datetime.utcnow()
+    user.biometric_consent_by = actor_id
+
+
+def _check_same_person(user: User, existing: list, embedding, pose_label: str | None) -> None:
+    """Same person as the samples already captured for this employee?"""
+    if not existing:
+        return
+    own_centroid = normalize(np.vstack([normalize(np.array(s.vector)) for s in existing]).mean(axis=0))
+    consistency = float(own_centroid @ embedding)
+    if consistency < setting("ENROLL_CONSISTENCY_THRESHOLD"):
+        logger.warning("enroll reject user=%s pose=%s reason=inconsistent_face similarity=%s", user.id, pose_label, round(consistency, 4))
+        raise AppError(
+            "This face doesn't match the earlier samples for this employee. "
+            "Make sure only the employee being enrolled is in front of the camera.",
+            422,
+            {"code": "INCONSISTENT_FACE", "similarity": round(consistency, 4)},
+        )
+
+
+def _check_not_enrolled_elsewhere(user: User, embedding, pose_label: str | None) -> None:
+    """Already enrolled as someone else?"""
+    ranked = embedding_index.rank(embedding, exclude_user_id=user.id)
+    if not ranked or ranked[0][1] < setting("ENROLL_DUPLICATE_THRESHOLD"):
+        return
+    other = db.session.get(User, ranked[0][0])
+    label = other.full_name if other else "another employee"
+    if other and other.employee_code:
+        label += f" ({other.employee_code})"
+    logger.warning(
+        "enroll reject user=%s pose=%s reason=duplicate_face similarity=%s matched_user=%s",
+        user.id, pose_label, round(ranked[0][1], 4), ranked[0][0],
+    )
+    raise AppError(
+        f"This face is already enrolled as {label}.",
+        409,
+        {"code": "DUPLICATE_FACE", "similarity": round(ranked[0][1], 4)},
+    )
+
+
+def _maybe_update_photo(user: User, existing: list, pose_label: str | None, quality_score: float, image, face) -> None:
+    """Keep the best frontal shot as the profile photo."""
+    is_frontal = (pose_label or "").startswith("frontal")
+    frontal_scores = [s.quality_score or 0 for s in existing if (s.pose_label or "").startswith("frontal")]
+    if user.photo is None or (is_frontal and quality_score > max(frontal_scores, default=0)):
+        user.photo = encrypt_bytes(face_thumbnail(image, face.box))
 
 
 def enroll_sample(user_id: str, image_bytes: bytes, pose_label: str = None,
@@ -304,19 +232,10 @@ def enroll_sample(user_id: str, image_bytes: bytes, pose_label: str = None,
     """
     cfg = current_app.config
     engine = active_engine()
-    user = db.session.get(User, user_id)
-    if not user:
-        raise AppError("Employee not found.", 404)
+    user = _require_user(user_id)
     if not user.is_active:
         raise AppError("This employee is deactivated. Reactivate them before enrolling.", 409)
-
-    # Face data is biometric: an admin must confirm the employee agreed
-    # before the first sample is stored. Recorded once per employee.
-    if user.biometric_consent_at is None:
-        if not consent:
-            raise AppError("Record the employee's consent before capturing their face.", 428, {"code": "CONSENT_REQUIRED"})
-        user.biometric_consent_at = datetime.utcnow()
-        user.biometric_consent_by = actor_id
+    _require_consent(user, consent, actor_id)
 
     existing = _current_samples(user.id)
     if len(existing) >= cfg["MAX_ENROLLMENT_SAMPLES"]:
@@ -338,45 +257,13 @@ def enroll_sample(user_id: str, image_bytes: bytes, pose_label: str = None,
         logger.warning("enroll reject user=%s pose=%s reason=invalid_embedding", user.id, pose_label)
         raise AppError("Failed to generate a valid face embedding.", 422)
 
-    # 1) Same person as the samples already captured for this employee?
-    if existing:
-        own_centroid = normalize(np.vstack([normalize(np.array(s.vector)) for s in existing]).mean(axis=0))
-        consistency = float(own_centroid @ embedding)
-        if consistency < setting("ENROLL_CONSISTENCY_THRESHOLD"):
-            logger.warning("enroll reject user=%s pose=%s reason=inconsistent_face similarity=%s", user.id, pose_label, round(consistency, 4))
-            raise AppError(
-                "This face doesn't match the earlier samples for this employee. "
-                "Make sure only the employee being enrolled is in front of the camera.",
-                422,
-                {"code": "INCONSISTENT_FACE", "similarity": round(consistency, 4)},
-            )
-
-    # 2) Already enrolled as someone else?
-    ranked = embedding_index.rank(embedding, exclude_user_id=user.id)
-    if ranked and ranked[0][1] >= setting("ENROLL_DUPLICATE_THRESHOLD"):
-        other = db.session.get(User, ranked[0][0])
-        label = other.full_name if other else "another employee"
-        if other and other.employee_code:
-            label += f" ({other.employee_code})"
-        logger.warning(
-            "enroll reject user=%s pose=%s reason=duplicate_face similarity=%s matched_user=%s",
-            user.id, pose_label, round(ranked[0][1], 4), ranked[0][0],
-        )
-        raise AppError(
-            f"This face is already enrolled as {label}.",
-            409,
-            {"code": "DUPLICATE_FACE", "similarity": round(ranked[0][1], 4)},
-        )
+    _check_same_person(user, existing, embedding, pose_label)
+    _check_not_enrolled_elsewhere(user, embedding, pose_label)
 
     record = FaceEmbedding(user_id=user.id, pose_label=pose_label, quality_score=quality["score"], model=engine.name)
     record.vector = embedding.tolist()
     db.session.add(record)
-
-    # Keep the best frontal shot as the profile photo.
-    is_frontal = (pose_label or "").startswith("frontal")
-    frontal_scores = [s.quality_score or 0 for s in existing if (s.pose_label or "").startswith("frontal")]
-    if user.photo is None or (is_frontal and quality["score"] > max(frontal_scores, default=0)):
-        user.photo = encrypt_bytes(_face_thumbnail(image, face.box))
+    _maybe_update_photo(user, existing, pose_label, quality["score"], image, face)
 
     db.session.commit()
     embedding_index.invalidate()
@@ -416,7 +303,7 @@ def assess_capture_readiness(image_bytes: bytes, pose_label: str | None,
         debug["quality"] = {"ok": bool(quality["ok"]), "score": round(float(quality["score"]), 3), "reason": quality["reason"]}
         debug["pose"] = {"ok": bool(pose["ok"]), "progress": round(float(pose["progress"]), 3), "reason": pose["reason"],
                          "yaw": pose["yaw"], "pitch": pose["pitch"], "label": pose_label or "frontal"}
-        _add_jaw(debug, pose.get("jaw"))
+        add_jaw(debug, pose.get("jaw"))
 
     if not quality["ok"]:
         return {"ready": False, "score": score, "reason": quality["reason"], **angles}
@@ -454,37 +341,51 @@ class _Observation:
     index: int                 # position in the burst
     image: np.ndarray
     face: object               # app.vision.engines.Face
-    track: int                 # face-track id (continuity, see _same_track)
+    track: int                 # face-track id (continuity, see app.vision.tracking)
     ear: tuple | None          # (left, right) eye aspect ratio, None if landmarks failed
     quality: float | None      # quality score, None when the frame failed the quality gate
 
 
-# Two consecutive face boxes belong to the same physical face only if they
-# overlap this much and are about the same size. Burst frames are ~120ms
-# apart: a person moving naturally keeps IoU well above 0.5, whereas a photo
-# or phone swapped in for another face jumps or changes scale.
-TRACK_MIN_IOU = 0.3
-TRACK_MAX_SIZE_RATIO = 1.4
+@dataclass(frozen=True)
+class _MatchPolicy:
+    """The thresholds one recognition burst is judged by, resolved once."""
+    threshold: float
+    margin: float
+    band: float
+    early_exit: float
+    min_vote_ratio: float
+    outlier_similarity: float
+
+    @classmethod
+    def resolve(cls, engine, cfg) -> "_MatchPolicy":
+        return cls(
+            threshold=setting("FACE_MATCH_THRESHOLD"),
+            margin=setting("FACE_AMBIGUITY_MARGIN"),
+            band=engine.DEFAULTS["LOW_CONFIDENCE_BAND"],
+            early_exit=engine.DEFAULTS["EARLY_EXIT_MARGIN"],
+            min_vote_ratio=cfg["RECOGNITION_MIN_VOTE_RATIO"],
+            outlier_similarity=engine.DEFAULTS["OUTLIER_SIMILARITY"],
+        )
 
 
-def _box_iou(a, b) -> float:
-    at, ar, ab, al = a
-    bt, br, bb, bl = b
-    iw = max(0, min(ar, br) - max(al, bl))
-    ih = max(0, min(ab, bb) - max(at, bt))
-    inter = iw * ih
-    union = max(0, ar - al) * max(0, ab - at) + max(0, br - bl) * max(0, bb - bt) - inter
-    return inter / union if union > 0 else 0.0
+@dataclass
+class _BurstScan:
+    """What scanning every frame of a burst found."""
+    observations: list
+    last_reason: str           # why the most recent face-less frame had no usable face
+    quality_reason: str | None  # why the most recent low-quality frame failed the gate
+    track_count: int
 
 
-def _same_track(previous_box, box, min_iou: float) -> bool:
-    if previous_box is None:
-        return False
-    ph, h = max(previous_box[2] - previous_box[0], 1), max(box[2] - box[0], 1)
-    pw, w = max(previous_box[1] - previous_box[3], 1), max(box[1] - box[3], 1)
-    if max(ph / h, h / ph, pw / w, w / pw) > TRACK_MAX_SIZE_RATIO:
-        return False
-    return _box_iou(previous_box, box) >= min_iou
+@dataclass
+class _Identification:
+    """The outcome of embedding the best frames and deciding who they show."""
+    result: dict | None        # None when no frame could be embedded
+    vote_ratio: float
+    used: int                  # embeddings that took part in the decision
+    embeddings: list
+    embedded_obs: list         # observations that were embedded, in order
+    embedded: dict             # frame index -> embedding (None when the model rejected it)
 
 
 def _embed_frame(engine, cfg, obs: "_Observation"):
@@ -500,24 +401,124 @@ def _embed_frame(engine, cfg, obs: "_Observation"):
     return embedding / norm if norm > 0 else None
 
 
+def _locate_face(engine, cfg, image, previous, zone, debug: dict | None, index: int, total: int):
+    """The kiosk face in one burst frame, as (face, None) — or (None, the reason there is none).
+
+    The previous frame's face is tracked first (cheap); only when that fails
+    (or it wandered out of the guide oval) is the whole frame searched again."""
+    img_h, img_w = image.shape[:2]
+    width = cfg["DETECTION_WIDTH"]
+    face = engine.track(image, previous, width) if previous else None
+    if face is not None and zone and not (inside_zone(zone, face.box, img_w, img_h) and not too_small(zone, face.box, img_h)):
+        face = None  # the tracked face wandered out of the circle: look again from scratch
+    seen = [face] if face is not None else []
+    if face is None:
+        candidates = engine.detect(image, width)
+        seen = candidates
+        if debug is not None:
+            debug.update(detections_debug(image, seen, None, zone, frame=index, frames=total))
+        if zone:
+            inside = faces_in_zone(zone, candidates, img_w, img_h)
+            if candidates and not inside:
+                return None, MOVE_INTO_CIRCLE
+            candidates = inside
+        face, err = pick_single_face(candidates, allow_dominant=True)
+        if err:
+            return None, err
+        if zone and too_small(zone, face.box, img_h):
+            return None, MOVE_CLOSER
+    if debug is not None:
+        debug.update(detections_debug(image, seen, face, zone, frame=index, frames=total))
+    return face, None
+
+
+def _scan_frames(engine, cfg, frames: list[bytes], zone, debug: dict | None) -> _BurstScan:
+    """Every frame: find the face, assign it to a face track, read the eyes and score the quality.
+
+    A face whose box does not overlap the previous frame's face, changes size
+    abruptly, or follows a frame without a usable face starts a new track."""
+    min_iou = float(cfg.get("LIVENESS_TRACK_MIN_IOU", TRACK_MIN_IOU))
+    landmark_source = get_eye_landmark_source(cfg.get("LIVENESS_LANDMARK_MODEL"))
+
+    observations: list[_Observation] = []
+    last_reason = "No frames processed."
+    quality_reason = None
+    previous = None      # face to track from (detector hint)
+    track_box = None     # last face box of the current track; None = the track was broken
+    track_id = -1
+    for index, raw in enumerate(frames):
+        try:
+            image = decode_image(raw)
+        except AppError:
+            track_box = None
+            continue
+        face, reason = _locate_face(engine, cfg, image, previous, zone, debug, index, len(frames))
+        if face is None:
+            last_reason, previous, track_box = reason, None, None
+            continue
+        previous = face
+        if not _same_track(track_box, face.box, min_iou):
+            track_id += 1
+        track_box = face.box
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        ear = frame_ear(gray, face.landmark_rect(), source=landmark_source)
+        quality = assess_quality(image, face.box)
+        if not quality["ok"]:
+            quality_reason = quality["reason"]
+        observations.append(_Observation(index, image, face, track_id, ear,
+                                         quality["score"] if quality["ok"] else None))
+    return _BurstScan(observations, last_reason, quality_reason, track_id + 1)
+
+
+def _identify(engine, cfg, best_frames: list, policy: _MatchPolicy) -> _Identification:
+    """Embed the best frames and decide who they show. Stops early once two
+    frames clearly agree, so the common case costs only two embeddings."""
+    embedded: dict = {}
+    embeddings: list = []
+    embedded_obs: list = []
+    result, vote_ratio, used = None, 0.0, 0
+    for obs in best_frames:
+        embedding = _embed_frame(engine, cfg, obs)
+        embedded[obs.index] = embedding
+        if embedding is None:
+            continue
+        embeddings.append(embedding)
+        embedded_obs.append(obs)
+        if len(embeddings) < min(2, len(best_frames)):
+            continue
+        result, vote_ratio, used = _decide(embeddings, policy)
+        clear_match = (result["status"] == "MATCHED" and vote_ratio == 1.0
+                       and result["score"] >= policy.threshold + policy.early_exit)
+        clear_stranger = result["status"] == "NO_MATCH" and result["score"] < policy.threshold - 2 * policy.band
+        if clear_match or clear_stranger:
+            break
+
+    # A burst may contain only one usable embedding when another frame is
+    # blurry or the model rejects it. Still classify the usable sample rather
+    # than leaving result/used undefined and turning a recoverable scan into
+    # a 500 response.
+    if result is None and embeddings:
+        result, vote_ratio, used = _decide(embeddings, policy)
+    return _Identification(result, vote_ratio, used, embeddings, embedded_obs, embedded)
+
+
 def recognize_burst(frames: list[bytes], zone=None, debug: dict | None = None) -> dict:
     """
     Recognises one person from a short burst of frames.
 
     1. Every frame: fast detection (or tracking) + eye landmarks (for blink
-       liveness). Each face is assigned to a face *track*: a face whose box
-       does not overlap the previous frame's face, changes size abruptly, or
-       follows a frame without a usable face starts a new track.
+       liveness). Each face is assigned to a face *track* (_scan_frames).
     2. Only the track containing the best-quality frame is used, for BOTH
        identity and liveness, so a blink cannot be borrowed from another face
        shown in between (e.g. a photo of a coworker alternated with the
        attacker's own blinking face).
     3. The best frames of that track get an embedding; stops early once two
-       frames clearly agree, so the common case costs only two embeddings.
+       frames clearly agree, so the common case costs only two embeddings
+       (_identify).
     4. Embeddings are averaged (noise cancels, identity doesn't), outlier
        frames are dropped, and the average is matched against the index.
        Each frame also votes; the match is only accepted if enough
-       individual frames agree on the same person.
+       individual frames agree on the same person (_decide).
     5. On a match, the burst's most closed-eye frame (if any) is embedded and
        must still look like the matched person (LIVENESS_VERIFY_BLINK_FRAME);
        otherwise the burst's EARs are discarded so it cannot satisfy liveness.
@@ -537,69 +538,20 @@ def recognize_burst(frames: list[bytes], zone=None, debug: dict | None = None) -
     validate_burst_pixel_budget(frames)
     engine = active_engine()
     started = time.perf_counter()
-    min_iou = float(cfg.get("LIVENESS_TRACK_MIN_IOU", TRACK_MIN_IOU))
-    landmark_source = get_eye_landmark_source(cfg.get("LIVENESS_LANDMARK_MODEL"))
 
-    observations: list[_Observation] = []
-    last_reason = "No frames processed."
-    quality_reason = None
-    previous = None      # face to track from (detector hint)
-    track_box = None     # last face box of the current track; None = the track was broken
-    track_id = -1
-    for index, raw in enumerate(frames):
-        try:
-            image = decode_image(raw)
-        except AppError:
-            track_box = None
-            continue
-        img_h, img_w = image.shape[:2]
-        face = engine.track(image, previous, cfg["DETECTION_WIDTH"]) if previous else None
-        if face is not None and zone and not (inside_zone(zone, face.box, img_w, img_h) and not too_small(zone, face.box, img_h)):
-            face = None  # the tracked face wandered out of the circle: look again from scratch
-        seen = [face] if face is not None else []
-        if face is None:
-            candidates = engine.detect(image, cfg["DETECTION_WIDTH"])
-            seen = candidates
-            if debug is not None:
-                debug.update(_detections_debug(image, seen, None, zone, frame=index, frames=len(frames)))
-            if zone:
-                inside = faces_in_zone(zone, candidates, img_w, img_h)
-                if candidates and not inside:
-                    last_reason, previous, track_box = MOVE_INTO_CIRCLE, None, None
-                    continue
-                candidates = inside
-            face, err = pick_single_face(candidates, allow_dominant=True)
-            if err:
-                last_reason, previous, track_box = err, None, None
-                continue
-            if zone and too_small(zone, face.box, img_h):
-                last_reason, previous, track_box = MOVE_CLOSER, None, None
-                continue
-        if debug is not None:
-            debug.update(_detections_debug(image, seen, face, zone, frame=index, frames=len(frames)))
-        previous = face
-        if not _same_track(track_box, face.box, min_iou):
-            track_id += 1
-        track_box = face.box
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        ear = frame_ear(gray, face.landmark_rect(), source=landmark_source)
-        quality = assess_quality(image, face.box)
-        if not quality["ok"]:
-            quality_reason = quality["reason"]
-        observations.append(_Observation(index, image, face, track_id, ear,
-                                         quality["score"] if quality["ok"] else None))
-
+    scan = _scan_frames(engine, cfg, frames, zone, debug)
+    observations = scan.observations
     face_count = len(observations)
     usable = [o for o in observations if o.quality is not None]
     if not usable:
         # No identity, so no EARs either: liveness samples are only ever
         # pooled for the person they were measured on.
-        if quality_reason:
-            return {"status": "LOW_CONFIDENCE", "reason": quality_reason, "score": 0.0,
+        if scan.quality_reason:
+            return {"status": "LOW_CONFIDENCE", "reason": scan.quality_reason, "score": 0.0,
                     "ears": [], "frames_with_face": face_count,
                     "frames_embedded": 0, "vote_ratio": 0.0, "engine": engine.name,
                     "elapsed_ms": _ms(started)}
-        return {"status": "NO_FACE", "reason": last_reason, "ears": [], "frames_with_face": 0,
+        return {"status": "NO_FACE", "reason": scan.last_reason, "ears": [], "frames_with_face": 0,
                 "elapsed_ms": _ms(started)}
 
     # The identity track is the one holding the best frame; every other track
@@ -609,51 +561,22 @@ def recognize_burst(frames: list[bytes], zone=None, debug: dict | None = None) -
     discarded = face_count - len(track_obs)
     if discarded:
         logger.warning("recognition burst: %d face track(s); kept track %d (%d frames), discarded %d frame(s) "
-                       "from other tracks", track_id + 1, identity_track, len(track_obs), discarded)
+                       "from other tracks", scan.track_count, identity_track, len(track_obs), discarded)
 
     # Match only frames that pass the same size, blur and lighting gate used
     # by enrollment; prefer the overall best image instead of sharpness alone.
     best_frames = sorted((o for o in track_obs if o.quality is not None),
                          key=lambda o: o.quality, reverse=True)[: cfg["RECOGNITION_MAX_EMBED_FRAMES"]]
-    threshold, margin = setting("FACE_MATCH_THRESHOLD"), setting("FACE_AMBIGUITY_MARGIN")
-    band, early_exit = engine.DEFAULTS["LOW_CONFIDENCE_BAND"], engine.DEFAULTS["EARLY_EXIT_MARGIN"]
+    policy = _MatchPolicy.resolve(engine, cfg)
+    identified = _identify(engine, cfg, best_frames, policy)
+    embed_calls = len(identified.embedded)
 
-    embedded: dict = {}   # frame index -> embedding (or None when the model rejected it)
-    embeddings = []
-    embedded_obs = []
-    result = None
-    vote_ratio = 0.0
-    used = 0
-    for obs in best_frames:
-        embedding = _embed_frame(engine, cfg, obs)
-        embedded[obs.index] = embedding
-        if embedding is None:
-            continue
-        embeddings.append(embedding)
-        embedded_obs.append(obs)
-        if len(embeddings) < min(2, len(best_frames)):
-            continue
-        result, vote_ratio, used = _decide(embeddings, threshold, margin, band,
-                                           cfg["RECOGNITION_MIN_VOTE_RATIO"], engine.DEFAULTS["OUTLIER_SIMILARITY"])
-        clear_match = result["status"] == "MATCHED" and vote_ratio == 1.0 and result["score"] >= threshold + early_exit
-        clear_stranger = result["status"] == "NO_MATCH" and result["score"] < threshold - 2 * band
-        if clear_match or clear_stranger:
-            break
-    embed_calls = len(embedded)
-
-    if not embeddings:
+    if identified.result is None:
         return {"status": "LOW_CONFIDENCE", "reason": "Could not generate a valid face embedding.",
                 "score": 0.0, "ears": [], "frames_with_face": face_count,
                 "frames_embedded": 0, "embeddings_computed": embed_calls, "vote_ratio": 0.0,
                 "engine": engine.name, "elapsed_ms": _ms(started)}
-
-    # A burst may contain only one usable embedding when another frame is
-    # blurry or the model rejects it. Still classify the usable sample rather
-    # than leaving result/used undefined and turning a recoverable scan into
-    # a 500 response.
-    if result is None:
-        result, vote_ratio, used = _decide(embeddings, threshold, margin, band,
-                                           cfg["RECOGNITION_MIN_VOTE_RATIO"], engine.DEFAULTS["OUTLIER_SIMILARITY"])
+    result = identified.result
 
     ear_obs = [o for o in track_obs if o.ear is not None]
     ears = [o.ear for o in ear_obs]
@@ -661,7 +584,7 @@ def recognize_burst(frames: list[bytes], zone=None, debug: dict | None = None) -
     if (result["status"] == "MATCHED" and cfg.get("LIVENESS_REQUIRED", True)
             and cfg.get("LIVENESS_VERIFY_BLINK_FRAME", True)):
         verdict, extra_calls = _verify_blink_frame(
-            engine, cfg, ear_obs, embedded, result["user_id"], threshold, margin, band,
+            engine, cfg, ear_obs, identified.embedded, result["user_id"], policy,
             float(cfg.get("LIVENESS_EAR_BLINK_DELTA", 0.06)))
         embed_calls += extra_calls
         if verdict != "ok":
@@ -669,25 +592,25 @@ def recognize_burst(frames: list[bytes], zone=None, debug: dict | None = None) -
             mismatch = verdict == "mismatch"
 
     spoof_count = max(1, int(cfg.get("SPOOF_CHECK_FRAMES", 3) or 1))
-    result.update(_spoof_check(cfg, [(o.image, o.face) for o in embedded_obs[:spoof_count]]))
+    result.update(_spoof_check(cfg, [(o.image, o.face) for o in identified.embedded_obs[:spoof_count]]))
     if cfg["SNAPSHOTS_ENABLED"]:
-        result["snapshot_jpeg"] = _snapshot_jpeg(best_frames[0].image)
+        result["snapshot_jpeg"] = snapshot_jpeg(best_frames[0].image)
     result.update({
         "ears": ears,
         "liveness_identity_mismatch": mismatch,
         "frames_with_face": face_count,
         "frames_discarded_other_tracks": discarded,
-        "frames_embedded": used,
+        "frames_embedded": identified.used,
         "embeddings_computed": embed_calls,
-        "vote_ratio": round(vote_ratio, 3),
+        "vote_ratio": round(identified.vote_ratio, 3),
         "engine": engine.name,
         "elapsed_ms": _ms(started),
     })
     return result
 
 
-def _verify_blink_frame(engine, cfg, ear_obs: list, embedded: dict, user_id, threshold: float,
-                        margin: float, band: float, blink_delta: float) -> tuple[str, int]:
+def _verify_blink_frame(engine, cfg, ear_obs: list, embedded: dict, user_id, policy: _MatchPolicy,
+                        blink_delta: float) -> tuple[str, int]:
     """
     Confirm the burst's closed-eye frame shows the matched person.
 
@@ -698,6 +621,7 @@ def _verify_blink_frame(engine, cfg, ear_obs: list, embedded: dict, user_id, thr
     an adjacent open-eye frame that was not already embedded for identity
     must reach the normal per-frame vote bar (threshold - band).
     """
+    threshold, margin, band = policy.threshold, policy.margin, policy.band
     candidate = blink_candidate([o.ear for o in ear_obs], blink_delta)
     if candidate is None:
         return "ok", 0
@@ -759,38 +683,25 @@ def _spoof_check(cfg, frames: list) -> dict:
         return {"spoof_score": None, "spoof_suspected": False}
 
 
-def _snapshot_jpeg(image, max_width: int = 640) -> bytes | None:
-    h, w = image.shape[:2]
-    if w > max_width:
-        image = cv2.resize(image, (max_width, int(round(h * max_width / w))), interpolation=cv2.INTER_AREA)
-    ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 85])
-    return buf.tobytes() if ok else None
-
-
-def _decide(embeddings: list, threshold: float, margin: float, band: float,
-            min_vote_ratio: float, outlier_similarity: float):
+def _decide(embeddings: list, policy: _MatchPolicy):
     """Average the burst embeddings (minus outliers), match, then check per-frame votes."""
     stack = np.vstack(embeddings)
     centroid = normalize(stack.mean(axis=0))
     if len(stack) > 2:
-        keep = stack @ centroid >= outlier_similarity
+        keep = stack @ centroid >= policy.outlier_similarity
         if keep.any():
             stack = stack[keep]
             centroid = normalize(stack.mean(axis=0))
 
     ranked_centroid = embedding_index.rank(centroid)
-    result = classify_match(ranked_centroid, threshold, margin, band)
+    result = classify_match(ranked_centroid, policy.threshold, policy.margin, policy.band)
     result["candidate_user_id"] = ranked_centroid[0][0] if ranked_centroid else None
     votes = 0
     for emb in stack:
         ranked = embedding_index.rank(emb)
-        if ranked and ranked[0][0] == result.get("user_id") and ranked[0][1] >= threshold - band:
+        if ranked and ranked[0][0] == result.get("user_id") and ranked[0][1] >= policy.threshold - policy.band:
             votes += 1
     vote_ratio = votes / len(stack)
-    if result["status"] == "MATCHED" and vote_ratio < min_vote_ratio:
+    if result["status"] == "MATCHED" and vote_ratio < policy.min_vote_ratio:
         result = {**result, "status": "LOW_CONFIDENCE", "user_id": None}
     return result, vote_ratio, int(len(stack))
-
-
-def _ms(started: float) -> int:
-    return int((time.perf_counter() - started) * 1000)

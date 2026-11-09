@@ -19,8 +19,7 @@ from app.vision.antispoof import resolve_mode, texture_realness
 from app.vision.engines import _jitter_variants
 from app.vision.enhance import enhance_for_embedding, needs_enhancement
 
-from test_recognition_routes import BaseAppTest, TestConfig, jpeg, unit
-from app import create_app
+from test_recognition_routes import BaseAppTest, jpeg, unit
 
 
 def _face_image(left=140, right=140, size=200):

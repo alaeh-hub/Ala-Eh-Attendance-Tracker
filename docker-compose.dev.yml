@@ -6,7 +6,8 @@
 #                          and /socket.io to the backend, so the app, the API
 #                          and the refresh cookie share one origin (as in prod)
 #   http://localhost:5000  backend directly (API tools, curl)
-#   localhost:5432         PostgreSQL (user/db "attendance", password "attendance-dev")
+#   localhost:3307         MySQL (user/db "attendance", password "attendance-dev"; 3307 so it
+#                          does not clash with a MySQL installed on this machine at 3306)
 #
 # Frontend source is bind-mounted: edits under frontend/ show up instantly.
 # Backend code is baked into the image: after changing Python code run
@@ -19,20 +20,25 @@ name: attendance-dev
 
 services:
   db:
-    image: postgres:16.10-alpine
+    image: mysql:8.4.6
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
     environment:
-      POSTGRES_USER: attendance
-      POSTGRES_DB: attendance
-      POSTGRES_PASSWORD: attendance-dev
+      MYSQL_ROOT_PASSWORD: attendance-root-dev
+      MYSQL_DATABASE: attendance
+      MYSQL_USER: attendance
+      MYSQL_PASSWORD: attendance-dev
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:3307:3306"
     volumes:
-      - pgdata-dev:/var/lib/postgresql/data
+      - mysqldata-dev:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U attendance -d attendance"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uattendance -pattendance-dev --silent"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
+      start_period: 30s
 
   backend:
     build: ./backend
@@ -44,7 +50,7 @@ services:
         required: false
     environment:
       APP_ENV: development
-      DATABASE_URL: postgresql+psycopg2://attendance:attendance-dev@db:5432/attendance
+      DATABASE_URL: mysql+pymysql://attendance:attendance-dev@db:3306/attendance?charset=utf8mb4
       CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
       # Plain HTTP in dev: the refresh cookie must not be Secure-only.
       JWT_COOKIE_SECURE: "false"
@@ -91,6 +97,6 @@ services:
       - backend
 
 volumes:
-  pgdata-dev:
+  mysqldata-dev:
   backend-logs-dev:
   frontend-node-modules-dev:

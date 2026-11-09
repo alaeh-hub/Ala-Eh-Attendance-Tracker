@@ -7,6 +7,7 @@ from app.extensions import db
 from app.middleware.error_handler import AppError
 from app.models.department import Department
 from app.models.user import User
+from app.services.attendance_service import minutes_of_day
 from app.utils.audit import log_action
 from app.utils.auth import load_current_user, require_roles
 
@@ -74,11 +75,6 @@ def _clean_roles(value) -> list:
     return cleaned
 
 
-def _minutes(hhmm: str) -> int:
-    hh, mm = hhmm.split(":")
-    return int(hh) * 60 + int(mm)
-
-
 def _validate_schedule(start: str | None, end: str | None) -> None:
     """A fixed schedule needs both ends or neither. end <= start is legal:
     it is an overnight shift (22:00-06:00 ends the next morning)."""
@@ -92,10 +88,10 @@ def _break_fit(shift_start: str, shift_end: str, break_start: str, break_end: st
     """'inside', 'outside' or 'straddles': where the break lies relative to
     the shift, with both measured as offsets from the shift start so that
     overnight shifts and breaks after midnight compare correctly."""
-    s = _minutes(shift_start)
-    span = (_minutes(shift_end) - s) % 1440 or 1440
-    b0 = (_minutes(break_start) - s) % 1440
-    b1 = b0 + ((_minutes(break_end) - _minutes(break_start)) % 1440)
+    s = minutes_of_day(shift_start)
+    span = (minutes_of_day(shift_end) - s) % 1440 or 1440
+    b0 = (minutes_of_day(break_start) - s) % 1440
+    b1 = b0 + ((minutes_of_day(break_end) - minutes_of_day(break_start)) % 1440)
     if b1 <= span:
         return "inside"
     if b0 >= span and b1 <= 1440:
@@ -209,22 +205,9 @@ def create_department():
     return jsonify(_serialize(dept)), 201
 
 
-@department_bp.patch("/<dept_id>")
-@require_roles("ADMIN")
-def update_department(dept_id):
-    dept = db.session.get(Department, dept_id)
-    if not dept:
-        raise AppError("Department not found.", 404)
-
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        raise AppError("A JSON object is required.", 400)
-
-    before = _schedule_snapshot(dept)
-    old_name = dept.name
-    if "name" in data:
-        dept.name = _validate_name(_clean_name(data["name"]), exclude_id=dept.id)
-
+def _apply_schedule(dept: Department, data: dict) -> None:
+    """Apply shift, hours, roles and break fields from a PATCH body, then
+    validate the department as it will be saved. Nothing is committed here."""
     has_shifting = _clean_bool(data["has_shifting"], "has_shifting") if "has_shifting" in data else dept.has_shifting
     if "shifts" in data or "has_shifting" in data:
         shifts = _clean_shifts(data.get("shifts", dept.shifts)) if has_shifting else []
@@ -255,6 +238,25 @@ def update_department(dept_id):
         _validate_schedule(dept.start_time, dept.end_time)
         _validate_break(dept.start_time, dept.end_time, dept.shifts if dept.has_shifting else [],
                         dept.break_start or "12:00", dept.break_end or "13:00", explicit=break_given)
+
+
+@department_bp.patch("/<dept_id>")
+@require_roles("ADMIN")
+def update_department(dept_id):
+    dept = db.session.get(Department, dept_id)
+    if not dept:
+        raise AppError("Department not found.", 404)
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        raise AppError("A JSON object is required.", 400)
+
+    before = _schedule_snapshot(dept)
+    old_name = dept.name
+    if "name" in data:
+        dept.name = _validate_name(_clean_name(data["name"]), exclude_id=dept.id)
+
+    _apply_schedule(dept, data)
 
     # Keep existing employees' free-text department column in sync with a rename.
     if dept.name != old_name:

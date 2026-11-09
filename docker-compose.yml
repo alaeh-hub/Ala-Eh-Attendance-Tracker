@@ -1,8 +1,8 @@
 # Production stack for the face-recognition attendance system.
 #
-#   browser/kiosk --HTTPS--> caddy :443 --+--> /api, /socket.io --> backend:5000 --> db:5432
+#   browser/kiosk --HTTPS--> caddy :443 --+--> /api, /socket.io --> backend:5000 --> db:3306
 #                                          +--> everything else  --> frontend:8080 (static SPA)
-#   backup: pg_dump of db every BACKUP_INTERVAL_SECONDS into BACKUP_DIR
+#   backup: mysqldump of db every BACKUP_INTERVAL_SECONDS into BACKUP_DIR
 #
 # Only caddy publishes ports. The database sits on an internal network with
 # no route to the outside world.
@@ -106,37 +106,40 @@ services:
       - data
 
   db:
-    image: postgres:16.10-alpine
+    image: mysql:8.4.6
     <<: *hardening
     restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
     environment:
-      POSTGRES_USER: attendance
-      POSTGRES_DB: attendance
-    env_file: backend/.env          # supplies POSTGRES_PASSWORD
+      MYSQL_DATABASE: attendance
+      MYSQL_USER: attendance
+    env_file: backend/.env          # supplies MYSQL_ROOT_PASSWORD and MYSQL_PASSWORD
     volumes:
-      - pgdata:/var/lib/postgresql/data
-    shm_size: 128mb
+      - mysqldata:/var/lib/mysql
     networks:
       - data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U attendance -d attendance"]
+      # The app user must be able to log in, not just the server to answer.
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uattendance -p\"$$MYSQL_PASSWORD\" --silent"]
       interval: 5s
       timeout: 3s
-      retries: 10
-      start_period: 20s
+      retries: 20
+      start_period: 30s
 
   backup:
-    # Same image as db, so pg_dump always matches the server version.
-    image: postgres:16.10-alpine
+    # Same image as db, so mysqldump always matches the server version.
+    image: mysql:8.4.6
     <<: *hardening
     restart: unless-stopped
     init: true                      # clean, immediate stop on `docker compose stop`
     entrypoint: ["sh", "/usr/local/bin/backup.sh"]
-    env_file: backend/.env          # supplies POSTGRES_PASSWORD
+    env_file: backend/.env          # supplies MYSQL_PASSWORD
     environment:
-      PGHOST: db
-      PGUSER: attendance
-      PGDATABASE: attendance
+      MYSQL_HOST: db
+      MYSQL_USER: attendance
+      MYSQL_DATABASE: attendance
       BACKUP_DIR: /backups
       BACKUP_KEEP: ${BACKUP_KEEP:-14}
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
@@ -155,7 +158,7 @@ networks:
     internal: true    # db and backup: no published ports, no internet access
 
 volumes:
-  pgdata:
+  mysqldata:
   backend-logs:
   caddy-data:
   caddy-config:

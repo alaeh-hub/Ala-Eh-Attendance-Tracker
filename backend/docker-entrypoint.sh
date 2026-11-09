@@ -19,8 +19,10 @@ if not url or url.startswith("sqlite"):
 
 from sqlalchemy import create_engine, text
 
+from config import database_uri
+
 deadline = time.monotonic() + int(os.environ.get("DB_WAIT_SECONDS", "90"))
-engine = create_engine(url, pool_pre_ping=True)
+engine = create_engine(database_uri(url), pool_pre_ping=True)
 while True:
     try:
         with engine.connect() as conn:

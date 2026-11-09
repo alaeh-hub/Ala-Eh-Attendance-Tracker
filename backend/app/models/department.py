@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime
 
 from app.extensions import db
+from app.models.types import LongText, UtcDateTime
 from app.models.user import iso_utc
 
 
@@ -25,9 +26,9 @@ class Department(db.Model):
 
     has_shifting = db.Column(db.Boolean, default=False, nullable=False)
     # JSON-encoded list[{"name": str, "start_time": "HH:MM", "end_time": "HH:MM"}]
-    shifts_json = db.Column(db.Text, nullable=True)
+    shifts_json = db.Column(LongText, nullable=True)
     # JSON-encoded list[str] of job roles/positions available in this department.
-    roles_json = db.Column(db.Text, nullable=True)
+    roles_json = db.Column(LongText, nullable=True)
 
     # Lunch break window, "HH:MM" 24-hour, org-local. Time inside this
     # window is never counted as worked time — whether the employee
@@ -37,8 +38,8 @@ class Department(db.Model):
     break_start = db.Column(db.String(5), nullable=True, default="12:00")
     break_end = db.Column(db.String(5), nullable=True, default="13:00")
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(UtcDateTime, default=datetime.utcnow)
+    updated_at = db.Column(UtcDateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     @property
     def shifts(self) -> list:

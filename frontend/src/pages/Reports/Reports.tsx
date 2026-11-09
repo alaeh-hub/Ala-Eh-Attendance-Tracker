@@ -11,6 +11,7 @@ import type { TodayReport } from "../../types";
 import { formatDate, formatTimeWithSeconds, orgDate, orgMonthStart } from "../../utils/orgTime";
 import Highlight from "../../components/Highlight";
 import SearchInput from "../../components/SearchInput";
+import { hoursLabel } from "../../utils/hours";
 import { smartFilter } from "../../utils/search";
 import { Select, DateField } from "../../components/fields";
 
@@ -87,16 +88,6 @@ const PRESETS = [
   { key: "month", label: "This month" },
   { key: "last-month", label: "Last month" },
 ] as const;
-
-function hoursLabel(h: number) {
-  let hh = Math.floor(h);
-  let mm = Math.round((h - hh) * 60);
-  if (mm === 60) {
-    hh += 1;
-    mm = 0;
-  }
-  return `${hh}h ${String(mm).padStart(2, "0")}m`;
-}
 
 export default function Reports() {
   const [tab, setTab] = useState<"hours" | "audit">("hours");
