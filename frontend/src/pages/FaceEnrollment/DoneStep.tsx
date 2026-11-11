@@ -31,7 +31,7 @@ export default function DoneStep({ employee, onAnother }: { employee: User; onAn
       <dl className="divide-y divide-white/[0.05] px-4 sm:px-6">
         {rows.map(([k, v]) => (
           <div key={k} className="flex justify-between py-3 text-sm">
-            <dt className="text-neutral-500">{k}</dt>
+            <dt className="text-neutral-400">{k}</dt>
             <dd className="font-medium text-neutral-200">{v || "—"}</dd>
           </div>
         ))}

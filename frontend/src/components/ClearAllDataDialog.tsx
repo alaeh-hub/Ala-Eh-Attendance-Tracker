@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import api, { errorMessage } from "../services/api";
 import Icon from "./Icon";
-import { Modal, Spinner } from "./ui";
+import { Banner, Modal, Spinner } from "./ui";
 
 export interface ClearAllResult {
   users_removed: number;
@@ -62,12 +62,7 @@ export default function ClearAllDataDialog({ open, onClose, onDone }: { open: bo
   return (
     <Modal open={open} onClose={busy ? () => undefined : onClose} title="Clear all data">
       <form onSubmit={submit} className="space-y-5 p-6 text-sm">
-        <p className="flex items-start gap-2 rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-red-200">
-          <Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>
-            This permanently deletes company data and <b>cannot be undone</b>.
-          </span>
-        </p>
+        <Banner tone="error">This permanently deletes company data and <b>cannot be undone</b>.</Banner>
 
         <div>
           <p className="mb-1.5 font-semibold text-white">Deleted</p>

@@ -4,8 +4,7 @@ import { motionOK } from "../lib/motion";
 
 /*
  * Page choreography with anime.js. Anything that appears inside the page container (a table's rows once their data
- * arrives, stat figures, feed items, bars) rises into place in a quick stagger; bars grow from their left edge; the section
- * rule above a title draws across. Rows that React merely re-renders are not animated again, only newly inserted ones.
+ * arrives, stat figures, feed items, bars) rises into place in a quick stagger; bars grow from their left edge. Rows that React merely re-renders are not animated again, only newly inserted ones.
  *
  * It watches the DOM instead of asking each page to opt in, so a new table or list gets the same treatment for free.
  * Opt out per element with data-no-motion.
@@ -64,8 +63,6 @@ export function usePageChoreography(ref: RefObject<HTMLElement>, key: string) {
     };
 
     scan([root]);
-    const rule = root.querySelector<HTMLElement>(".section-rule");
-    if (rule) animate(rule, { clipPath: ["inset(0 100% 0 0)", "inset(0 0% 0 0)"], duration: 900, ease: "outExpo" });
 
     const mo = new MutationObserver((records) => {
       for (const r of records) if (r.addedNodes.length) scan(Array.from(r.addedNodes));

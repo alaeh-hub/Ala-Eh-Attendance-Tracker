@@ -382,7 +382,7 @@ export default function CaptureStep({ employee, onBack, onDone }: { employee: Us
   const showBanner = !panelOpen && (!!notice || (ready && !!pose));
 
   return (
-    <div ref={containerRef} className="fixed inset-0 z-40 touch-manipulation select-none overflow-hidden bg-black animate-fade-in">
+    <div ref={containerRef} data-theme="dark" className="fixed inset-0 z-40 touch-manipulation select-none overflow-hidden bg-black animate-fade-in">
       <CameraView
         fill
         ovalRef={ovalRef}

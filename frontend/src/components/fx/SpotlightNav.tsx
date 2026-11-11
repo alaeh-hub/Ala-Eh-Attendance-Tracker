@@ -27,9 +27,10 @@ export function SpotlightNav({ items, className }: { items: SpotlightItem[]; cla
   useEffect(() => {
     const nav = navRef.current;
     if (!nav) return;
-    const paint = (v: number) => {
+    // Two independent positions: --spot-x follows the pointer (the glow), --active-x belongs to the current page (the underline).
+    const paintActive = (v: number) => {
       x.current = v;
-      nav.style.setProperty("--spot-x", `${v}px`);
+      nav.style.setProperty("--active-x", `${v}px`);
     };
     const activeCentre = () => {
       const el = nav.querySelector<HTMLElement>('[aria-current="page"]');
@@ -41,17 +42,22 @@ export function SpotlightNav({ items, className }: { items: SpotlightItem[]; cla
     const settle = () => {
       const target = activeCentre();
       nav.dataset.hover = "0";
-      if (target === null) return;
+      if (target === null) {
+        nav.dataset.active = "0";
+        return;
+      }
+      nav.dataset.active = "1";
+      nav.style.setProperty("--spot-x", `${target}px`);
       // First placement snaps (no slide in from the left edge); later route changes glide.
       if (reduce || !placed.current) {
         placed.current = true;
-        return paint(target);
+        return paintActive(target);
       }
-      animate(x.current, target, { type: "spring", stiffness: 220, damping: 22, onUpdate: paint });
+      animate(x.current, target, { type: "spring", stiffness: 220, damping: 22, onUpdate: paintActive });
     };
     const move = (e: PointerEvent) => {
       nav.dataset.hover = "1";
-      paint(e.clientX - nav.getBoundingClientRect().left);
+      nav.style.setProperty("--spot-x", `${e.clientX - nav.getBoundingClientRect().left}px`);
     };
     settle();
     nav.addEventListener("pointermove", move);
@@ -71,7 +77,9 @@ export function SpotlightNav({ items, className }: { items: SpotlightItem[]; cla
           <Icon name={item.icon} className="h-[18px] w-[18px] shrink-0" />
           <span className="spot-label">{item.label}</span>
           {!!item.badge && item.badge > 0 && (
-            <span className="absolute -right-1 top-3.5 min-w-[1.1rem] rounded-full bg-red-500 px-1 text-center text-[10px] font-bold leading-[1.1rem] tabular-nums text-white">{item.badge > 99 ? "99+" : item.badge}</span>
+            <span className="nav-badge" aria-label={`${item.badge} pending`}>
+              {item.badge > 99 ? "99+" : item.badge}
+            </span>
           )}
         </NavLink>
       ))}

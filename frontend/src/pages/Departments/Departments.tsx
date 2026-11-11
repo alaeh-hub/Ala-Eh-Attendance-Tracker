@@ -62,7 +62,7 @@ export default function Departments() {
         }
       />
 
-      <div className="panel overflow-hidden animate-fade-up" style={{ animationDelay: "80ms" }}>
+      <div className="panel overflow-hidden">
         <div className="overflow-x-auto">
           <table className="rtable w-full min-w-[800px] table-fixed text-sm">
             <colgroup>
@@ -100,7 +100,7 @@ export default function Departments() {
                       {d.has_shifting ? (
                         <div className="flex flex-col gap-1">
                           {d.shifts.map((s) => (
-                            <span key={s.name} className="tag tag-info">
+                            <span key={s.name} className="tag tag-dot tag-info">
                               {s.name}: {s.start_time}–{s.end_time}
                               <NextDay start={s.start_time} end={s.end_time} />
                             </span>
@@ -109,7 +109,7 @@ export default function Departments() {
                       ) : (
                         <p className="text-neutral-300">
                           {formatRange(d.start_time, d.end_time)}
-                          {d.break_start && d.break_end && <span className="text-neutral-500"> · break {d.break_start}–{d.break_end}</span>}
+                          {d.break_start && d.break_end && <span className="text-neutral-400"> · break {d.break_start}–{d.break_end}</span>}
                         </p>
                       )}
                     </td>
@@ -123,7 +123,7 @@ export default function Departments() {
                           ))}
                         </div>
                       ) : (
-                        <span className="text-neutral-500">—</span>
+                        <span className="text-neutral-400">—</span>
                       )}
                     </td>
                     <td data-label="Employees" className="table-cell text-neutral-300">{d.employee_count}</td>
@@ -132,7 +132,7 @@ export default function Departments() {
                         <button onClick={() => setEditing(d)} className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-white/10 hover:text-white" title="Edit" aria-label={`Edit ${d.name}`}>
                           <Icon name="edit" className="h-4 w-4" />
                         </button>
-                        <button onClick={() => setConfirm(d)} className="rounded-lg p-2 text-neutral-500 transition-colors hover:bg-red-500/10 hover:text-red-300" title="Delete" aria-label={`Delete ${d.name}`}>
+                        <button onClick={() => setConfirm(d)} className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-red-500/10 hover:text-red-300" title="Delete" aria-label={`Delete ${d.name}`}>
                           <Icon name="trash" className="h-4 w-4" />
                         </button>
                       </div>

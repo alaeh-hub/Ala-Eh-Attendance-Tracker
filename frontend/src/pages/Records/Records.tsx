@@ -5,7 +5,7 @@ import { cleanParams, isCancelled, totalCount, useLatestRequest } from "../../co
 import { DateField, Select } from "../../components/fields";
 import Icon from "../../components/Icon";
 import SearchInput from "../../components/SearchInput";
-import { ConfirmDialog, PageHeader, Spinner } from "../../components/ui";
+import { ConfirmDialog, PageHeader, Spinner, Segmented } from "../../components/ui";
 import api, { downloadFile, errorMessage } from "../../services/api";
 import { useAuthStore } from "../../stores/authStore";
 import { toast } from "../../stores/toastStore";
@@ -154,22 +154,12 @@ export default function Records() {
         }
       />
 
-      <div className="bar mb-4 space-y-3 animate-fade-up">
-        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Date range">
-          {PRESETS.map((p) => (
-            <button
-              key={p.key}
-              type="button"
-              aria-pressed={activePreset === p.key}
-              onClick={() => setRange(preset(p.key))}
-              className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors sm:py-1.5 ${activePreset === p.key ? "bg-brand-500 text-black" : "bg-white/[0.04] text-neutral-300 hover:bg-white/[0.08]"}`}
-            >
-              {p.label}
-            </button>
-          ))}
+      <div className="bar mb-4 space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Segmented<(typeof PRESETS)[number]["key"]> label="Date range" options={PRESETS.map((p) => ({ key: p.key, label: p.label }))} value={activePreset ?? null} onChange={(k) => setRange(preset(k))} />
           <div className="flex w-full items-center gap-2 sm:w-auto">
             <DateField className="input min-w-0 flex-1 py-1.5 sm:w-auto sm:flex-none" value={from} max={to || undefined} onChange={(e) => setRange([e.target.value, to])} aria-label="From date" />
-            <span className="text-neutral-500" aria-hidden="true">→</span>
+            <span className="text-neutral-400" aria-hidden="true">→</span>
             <DateField className="input min-w-0 flex-1 py-1.5 sm:w-auto sm:flex-none" value={to} min={from || undefined} onChange={(e) => setRange([from, e.target.value])} aria-label="To date" />
           </div>
         </div>

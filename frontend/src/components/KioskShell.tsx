@@ -1,6 +1,7 @@
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorMessage } from "../services/api";
+import { useLogoutConfirm } from "./LogoutConfirm";
 import { useAuthStore } from "../stores/authStore";
 import Icon from "./Icon";
 import { Spinner } from "./ui";
@@ -18,7 +19,7 @@ export default function KioskShell({ children }: { children: ReactNode }) {
   const kioskLocked = useAuthStore((s) => s.kioskLocked);
   const lockKiosk = useAuthStore((s) => s.lockKiosk);
   const leavingKiosk = useAuthStore((s) => s.leavingKiosk);
-  const logout = useAuthStore((s) => s.logout);
+  const { ask: askLogout, dialog: logoutDialog } = useLogoutConfirm();
   const isDeviceAccount = useAuthStore((s) => s.user?.role === "KIOSK");
   const [error, setError] = useState<string | null>(null);
   const [locking, setLocking] = useState(false);
@@ -46,6 +47,7 @@ export default function KioskShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-black">
+      {logoutDialog}
       {kioskLocked ? (
         children
       ) : (
@@ -57,7 +59,7 @@ export default function KioskShell({ children }: { children: ReactNode }) {
               </p>
               <div className="flex gap-2">
                 {isDeviceAccount ? (
-                  <button className="btn-ghost" onClick={() => void logout()}>
+                  <button className="btn-ghost" onClick={askLogout}>
                     Sign out
                   </button>
                 ) : (

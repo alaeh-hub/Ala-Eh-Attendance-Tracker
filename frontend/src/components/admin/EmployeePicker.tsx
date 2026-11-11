@@ -120,7 +120,7 @@ export default function EmployeePicker({
         <div className="input flex items-center justify-between gap-2" aria-labelledby={`${id}-label`}>
           <span className="min-w-0 truncate text-white">
             {value.full_name}
-            {value.employee_code && <span className="ml-1 font-mono text-xs text-neutral-500">({value.employee_code})</span>}
+            {value.employee_code && <span className="ml-1 font-mono text-xs text-neutral-400">({value.employee_code})</span>}
           </span>
           <button
             type="button"
@@ -178,16 +178,16 @@ export default function EmployeePicker({
               className={`cursor-pointer rounded-lg px-3 py-2 text-sm ${i === active ? "bg-brand-500/15 text-white" : "text-neutral-300"}`}
             >
               <span className="font-semibold"><Highlight text={u.full_name} query={query} /></span>
-              <span className="ml-2 text-xs text-neutral-500"><Highlight text={[u.employee_code, u.department].filter(Boolean).join(" · ")} query={query} /></span>
+              <span className="ml-2 text-xs text-neutral-400"><Highlight text={[u.employee_code, u.department].filter(Boolean).join(" · ")} query={query} /></span>
             </li>
           ))}
           {!loading && users.length === 0 && (
-            <li className="px-3 py-2 text-sm text-neutral-500" role="presentation">
+            <li className="px-3 py-2 text-sm text-neutral-400" role="presentation">
               {error ? "Couldn't load employees." : "No matching employees."}
             </li>
           )}
           {total > search.users.length && (
-            <li className="px-3 py-1.5 text-xs text-neutral-500" role="presentation">
+            <li className="px-3 py-1.5 text-xs text-neutral-400" role="presentation">
               {total - search.users.length} more — keep typing to narrow down.
             </li>
           )}

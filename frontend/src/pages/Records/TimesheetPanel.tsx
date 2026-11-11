@@ -20,7 +20,7 @@ export default function TimesheetPanel({ rows, loading, query, totals, shown, on
 }) {
   return (
     <div {...tabPanelProps("records", "timesheet")}>
-      <div className="mb-4 grid grid-cols-2 gap-3 animate-fade-up sm:grid-cols-4">
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
           ["Employees", String(totals.people)],
           ["Hours worked", hoursLabel(totals.hours)],
@@ -28,12 +28,12 @@ export default function TimesheetPanel({ rows, loading, query, totals, shown, on
           ["Late arrivals", String(totals.late)],
         ].map(([k, v]) => (
           <div key={k} className="stat">
-            <p className="text-[11px] font-semibold text-neutral-500">{k}</p>
+            <p className="text-xs font-semibold text-neutral-400">{k}</p>
             <p className="mt-0.5 text-xl font-extrabold tabular-nums text-white">{loading ? "—" : v}</p>
           </div>
         ))}
       </div>
-      <div className="panel overflow-hidden animate-fade-up">
+      <div className="panel overflow-hidden">
         <div className="overflow-x-auto">
           <table className="rtable w-full min-w-[860px] table-fixed text-sm">
             <colgroup>
@@ -64,28 +64,28 @@ export default function TimesheetPanel({ rows, loading, query, totals, shown, on
                     <td data-label="Work day" className="table-cell cell-full whitespace-nowrap text-neutral-400">{formatDate(r.date, SHORT_DATE)}</td>
                     <td className="table-cell cell-primary">
                       <p className="font-semibold text-white"><Highlight text={r.user_name} query={query} /></p>
-                      <p className="text-xs text-neutral-500">{[r.employee_code, r.department].filter(Boolean).join(" · ")}</p>
+                      <p className="text-xs text-neutral-400">{[r.employee_code, r.department].filter(Boolean).join(" · ")}</p>
                     </td>
                     <td data-label="Time in" className="table-cell tabular-nums text-neutral-200">
                       <TimeWithDay iso={r.first_in} workDate={r.date} />
                     </td>
                     <td data-label="Time out" className="table-cell tabular-nums text-neutral-200">
-                      {r.last_out ? <TimeWithDay iso={r.last_out} workDate={r.date} /> : r.open && !missedTimeOut(r) ? <span className="tag tag-ok">On site</span> : "—"}
+                      {r.last_out ? <TimeWithDay iso={r.last_out} workDate={r.date} /> : r.open && !missedTimeOut(r) ? <span className="tag tag-dot tag-ok">On site</span> : "—"}
                     </td>
                     <td data-label="Hours" className="table-cell font-semibold tabular-nums text-white">{hoursLabel(r.hours)}</td>
                     <td data-label="OT" className="table-cell tabular-nums text-neutral-300">{r.ot_hours ? hoursLabel(r.ot_hours) : "—"}</td>
                     <td data-label="Status" className="table-cell cell-full">
                       <div className="flex flex-col gap-0.5 max-lg:flex-row max-lg:flex-wrap max-lg:gap-x-3">
                         {r.late ? (
-                          <span className="tag tag-warn">Late{r.late_minutes ? ` ${formatMinutes(r.late_minutes)}` : ""}</span>
+                          <span className="tag tag-dot tag-warn">Late{r.late_minutes ? ` ${formatMinutes(r.late_minutes)}` : ""}</span>
                         ) : r.first_in ? (
-                          <span className="tag tag-ok">On time</span>
+                          <span className="tag tag-dot tag-ok">On time</span>
                         ) : (
-                          <span className="tag tag-muted">No clock-in</span>
+                          <span className="tag tag-dot tag-muted">No clock-in</span>
                         )}
-                        {missedTimeOut(r) && <span className="tag tag-warn">No time out</span>}
+                        {missedTimeOut(r) && <span className="tag tag-dot tag-warn">No time out</span>}
                         {r.early_leave && (
-                          <span className="tag tag-info">Left early{r.early_minutes ? ` ${formatMinutes(r.early_minutes)}` : ""}</span>
+                          <span className="tag tag-dot tag-info">Left early{r.early_minutes ? ` ${formatMinutes(r.early_minutes)}` : ""}</span>
                         )}
                       </div>
                     </td>

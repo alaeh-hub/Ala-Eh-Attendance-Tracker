@@ -51,7 +51,7 @@ export default function Toaster() {
             </div>
             <button
               onClick={() => dismiss(t.id)}
-              className="-mr-1 -mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-lg text-neutral-500 transition-colors hover:text-white active:bg-white/10"
+              className="-mr-1 -mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-lg text-neutral-400 transition-colors hover:text-white active:bg-white/10"
               aria-label="Dismiss"
             >
               <Icon name="close" className="h-4 w-4" />

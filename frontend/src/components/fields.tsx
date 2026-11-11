@@ -283,7 +283,7 @@ export function Select({ className, children, value, onChange, disabled, require
               <ul ref={list} id={listId} role="listbox" className="max-h-56 overflow-y-auto overscroll-contain py-1 outline-none">
                 {renderOptions()}
                 {visible.length === 0 && (
-                  <li className="px-3 py-3 text-center text-sm text-neutral-500" role="presentation">
+                  <li className="px-3 py-3 text-center text-sm text-neutral-400" role="presentation">
                     No matches
                   </li>
                 )}

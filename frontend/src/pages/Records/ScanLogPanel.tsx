@@ -24,7 +24,7 @@ export default function ScanLogPanel({ events, loaded, loading, isStaff, isAdmin
   onPage: (offset: number) => void;
 }) {
   return (
-    <div className="panel overflow-hidden animate-fade-up" {...(isStaff ? {} : tabPanelProps("records", "log"))}>
+    <div className="panel overflow-hidden" {...(isStaff ? {} : tabPanelProps("records", "log"))}>
       <div className="overflow-x-auto">
         <table className="rtable w-full min-w-[760px] table-fixed text-sm">
           <colgroup>
@@ -59,9 +59,9 @@ export default function ScanLogPanel({ events, loaded, loading, isStaff, isAdmin
                   <tr key={e.id} className="hover:bg-white/[0.02]">
                     <td data-label="When" className="table-cell whitespace-nowrap">
                       <p className="font-semibold tabular-nums text-white">{formatTime(e.timestamp)}</p>
-                      <p className="text-xs text-neutral-500">{formatDate(e.timestamp, SHORT_DATE)}</p>
+                      <p className="text-xs text-neutral-400">{formatDate(e.timestamp, SHORT_DATE)}</p>
                       {otherWorkDay && (
-                        <p className="text-[11px] text-sky-300" title="Night shift: this punch counts toward the shift that started on this day.">
+                        <p className="text-xs text-sky-300" title="Night shift: this punch counts toward the shift that started on this day.">
                           Work day {formatDate(otherWorkDay, { month: "short", day: "numeric" })}
                         </p>
                       )}
@@ -69,10 +69,10 @@ export default function ScanLogPanel({ events, loaded, loading, isStaff, isAdmin
                     {!isStaff && (
                       <td className="table-cell cell-primary">
                         <div className="flex items-center gap-3">
-                          <Avatar userId={e.user_id} name={e.user_name} hasPhoto={e.has_photo} size="h-8 w-8" text="text-[10px]" />
+                          <Avatar userId={e.user_id} name={e.user_name} hasPhoto={e.has_photo} size="h-8 w-8" text="text-xs" />
                           <div className="min-w-0">
                             <p className="truncate font-semibold text-white"><Highlight text={e.user_name} query={query} /></p>
-                            <p className="truncate text-xs text-neutral-500">{[e.employee_code, e.department].filter(Boolean).join(" · ")}</p>
+                            <p className="truncate text-xs text-neutral-400">{[e.employee_code, e.department].filter(Boolean).join(" · ")}</p>
                           </div>
                         </div>
                       </td>
@@ -88,17 +88,17 @@ export default function ScanLogPanel({ events, loaded, loading, isStaff, isAdmin
                       ) : (
                         <span className="text-neutral-300">
                           Face · <span className="tabular-nums">{(e.match_score * 100).toFixed(0)}%</span>
-                          {e.liveness_passed && <span className="text-neutral-500"> · live</span>}
+                          {e.liveness_passed && <span className="text-neutral-400"> · live</span>}
                         </span>
                       )}
                     </td>
-                    <td data-label="Device" className="table-cell font-mono text-xs text-neutral-500">{e.device_id || "—"}</td>
+                    <td data-label="Device" className="table-cell font-mono text-xs text-neutral-400">{e.device_id || "—"}</td>
                     {isAdmin && (
                       <td className="table-cell cell-actions text-right">
                         <div className="flex justify-end gap-1">
                           <button
                             onClick={() => onEdit(e)}
-                            className="rounded-lg p-2 text-neutral-500 hover:bg-white/10 hover:text-white"
+                            className="rounded-lg p-2 text-neutral-400 hover:bg-white/10 hover:text-white"
                             title="Correct record"
                             aria-label={`Correct ${eventLabel(e)} for ${e.user_name ?? "employee"} at ${formatTime(e.timestamp)}`}
                           >
@@ -106,7 +106,7 @@ export default function ScanLogPanel({ events, loaded, loading, isStaff, isAdmin
                           </button>
                           <button
                             onClick={() => onDelete(e)}
-                            className="rounded-lg p-2 text-neutral-500 hover:bg-red-500/10 hover:text-red-300"
+                            className="rounded-lg p-2 text-neutral-400 hover:bg-red-500/10 hover:text-red-300"
                             title="Delete record"
                             aria-label={`Delete ${eventLabel(e)} for ${e.user_name ?? "employee"} at ${formatTime(e.timestamp)}`}
                           >

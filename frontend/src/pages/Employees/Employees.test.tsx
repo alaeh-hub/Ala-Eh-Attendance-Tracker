@@ -156,7 +156,8 @@ describe("Employees page", () => {
     setup();
     del.mockResolvedValue({ data: { deleted: true, archived: false, id: maria.id } });
     await screen.findByText("Maria Santos");
-    await userEvent.click(screen.getByRole("button", { name: "Delete Maria Santos" }));
+    await userEvent.click(screen.getByRole("button", { name: "More actions for Maria Santos" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete Maria Santos" }));
     expect(await screen.findByText(/attendance records are kept for payroll/)).toBeInTheDocument();
     expect(del).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "Delete employee" }));
@@ -169,7 +170,8 @@ describe("Employees page", () => {
     setup();
     del.mockResolvedValue({ data: { deleted: false, archived: true, id: maria.id } });
     await screen.findByText("Maria Santos");
-    await userEvent.click(screen.getByRole("button", { name: "Delete Maria Santos" }));
+    await userEvent.click(screen.getByRole("button", { name: "More actions for Maria Santos" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete Maria Santos" }));
     await userEvent.click(await screen.findByRole("button", { name: "Delete employee" }));
     await waitFor(() => expect(lastToast()?.title).toBe("Employee archived"));
     const row = screen.getByText("Maria Santos").closest("tr")!;
@@ -186,6 +188,9 @@ describe("Employees page", () => {
     await userEvent.selectOptions(within(dialog).getByLabelText(/^Role/), "OPERATOR");
     await userEvent.type(within(dialog).getByLabelText(/password/i), "longenough1");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    // Role and password changes are listed and confirmed first; nothing is sent until then.
+    expect(patch).not.toHaveBeenCalled();
+    await userEvent.click(await screen.findByRole("button", { name: "Apply changes" }));
     await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
     expect(patch).toHaveBeenCalledWith(`/users/${juan.id}`, { role: "OPERATOR", password: "longenough1" });
   });
@@ -217,5 +222,32 @@ describe("Employees page", () => {
     await userEvent.click(screen.getByRole("button", { name: "Next page" }));
     expect(screen.getByText("Person 55")).toBeInTheDocument();
     expect(screen.queryByText("Person 00")).not.toBeInTheDocument();
+  });
+});
+
+describe("Employees deep links", () => {
+  it("links the enroll tag and icon straight to /admin/enroll with the user id", async () => {
+    setup();
+    const tag = await screen.findByText("Not enrolled — enroll");
+    expect(tag.closest("a")).toHaveAttribute("href", `/admin/enroll?user=${juan.id}`);
+    expect(screen.getByRole("link", { name: "Face enrollment for Juan Dela Cruz" })).toHaveAttribute("href", `/admin/enroll?user=${juan.id}`);
+  });
+});
+
+describe("Employees confirmations", () => {
+  it("asks before discarding unsaved edits, and closes straight away when nothing changed", async () => {
+    setup();
+    await screen.findByText("Juan Dela Cruz");
+    await userEvent.click(screen.getByRole("button", { name: "Edit Juan Dela Cruz" }));
+    let dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit Juan Dela Cruz" }));
+    dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText("Phone"), "0917");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText("Discard your changes?")).toBeInTheDocument();
+    expect(patch).not.toHaveBeenCalled();
   });
 });

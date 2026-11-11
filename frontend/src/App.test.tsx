@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { useAuthStore } from "./stores/authStore";
@@ -31,10 +31,16 @@ vi.mock("./services/api", () => ({
 
 const kioskDevice: User = { ...admin, id: "kiosk-1", full_name: "Front gate", role: "KIOSK" };
 
+function LocationProbe() {
+  const l = useLocation();
+  return <span data-testid="loc" hidden>{l.pathname + l.search}</span>;
+}
+
 function renderAt(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <App />
+      <LocationProbe />
     </MemoryRouter>
   );
 }
@@ -105,6 +111,44 @@ describe("route guards", () => {
     signIn(admin);
     renderAt("/admin/review");
     expect(await screen.findByText("Scan review")).toBeInTheDocument();
+  });
+
+  it("keeps the query string when an old address redirects (/enroll?user=…)", async () => {
+    signIn(admin);
+    renderAt("/enroll?user=user-3");
+    await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/admin/enroll?user=user-3"));
+  });
+
+  it("asks before signing out, and only signs out once confirmed", async () => {
+    signIn(admin);
+    renderAt("/admin/review");
+    await screen.findByText("Scan review");
+    await userEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Log out" }));
+    const dialog = await screen.findByRole("dialog", { name: "Sign out?" });
+    expect(post).not.toHaveBeenCalledWith("/auth/logout");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Sign out?" })).not.toBeInTheDocument());
+    expect(useAuthStore.getState().user).not.toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Log out" }));
+    await userEvent.click(within(await screen.findByRole("dialog", { name: "Sign out?" })).getByRole("button", { name: "Sign out" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/auth/logout"));
+    await waitFor(() => expect(useAuthStore.getState().user).toBeNull());
+  });
+
+  it("switches the admin screens to the light theme and back, and the kiosk stays dark", async () => {
+    signIn(admin);
+    renderAt("/admin/review");
+    await screen.findByText("Scan review");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    await userEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Switch to light theme" }));
+    expect(document.documentElement.dataset.theme).toBe("light");
+    // The menu stays open so the change is visible straight away.
+    await userEvent.click(screen.getByRole("menuitem", { name: "Switch to dark theme" }));
+    expect(document.documentElement.dataset.theme).toBe("dark");
   });
 
   it("keeps staff out of admin pages and sends them to their own attendance", async () => {

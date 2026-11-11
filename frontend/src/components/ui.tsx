@@ -1,9 +1,9 @@
-import { ReactNode, useEffect, useId, useRef, useState } from "react";
+import { ButtonHTMLAttributes, ReactNode, forwardRef, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { animate as tween } from "motion";
 import { AnimatePresence, motion, useDragControls } from "motion/react";
 import { EASE_OUT, motionOK } from "../lib/motion";
-import api from "../services/api";
+import { loadPhoto } from "../utils/photoCache";
 import Icon, { IconName } from "./Icon";
 
 /**
@@ -11,8 +11,8 @@ import Icon, { IconName } from "./Icon";
  * Snaps instantly under reduced motion.
  */
 export function useCountUp(value: number, duration = 0.9) {
-  // Counts up from zero the first time it shows a value, then glides between values as they change.
-  const [display, setDisplay] = useState(() => (motionOK() ? 0 : value));
+  // Shows the first value immediately (the page already has its own entrance), then glides between values as they change.
+  const [display, setDisplay] = useState(value);
   const shown = useRef(display);
 
   useEffect(() => {
@@ -54,61 +54,7 @@ export function initials(name?: string | null) {
     .join("");
 }
 
-// Photos need the auth header, so they're fetched as blobs and cached per
-// session as object URLs. The cache is an LRU (Map keeps insertion order;
-// a hit is moved to the end) so a long-running kiosk doesn't grow forever.
-const PHOTO_CACHE_LIMIT = 200;
-const photoCache = new Map<string, Promise<string | null>>();
-
-function revokeWhenReady(entry: Promise<string | null> | undefined) {
-  entry?.then((url) => url && URL.revokeObjectURL(url)).catch(() => undefined);
-}
-
-export function forgetPhoto(userId: string) {
-  revokeWhenReady(photoCache.get(userId));
-  photoCache.delete(userId);
-}
-
-/** Drops every cached photo (called on sign-out so the next user can't see them). */
-export function clearPhotoCache() {
-  photoCache.forEach((entry) => revokeWhenReady(entry));
-  photoCache.clear();
-}
-
-/** Number of cached photos (for tests). */
-export function photoCacheSize() {
-  return photoCache.size;
-}
-
-function loadPhoto(userId: string) {
-  const hit = photoCache.get(userId);
-  if (hit) {
-    photoCache.delete(userId);
-    photoCache.set(userId, hit);
-    return hit;
-  }
-  const entry: Promise<string | null> = api
-    .get(`/users/${userId}/photo`, { responseType: "blob" })
-    .then((res) => {
-      const url = URL.createObjectURL(res.data);
-      // Evicted (or forgotten) while loading: don't leak the URL.
-      if (photoCache.get(userId) !== entry) {
-        setTimeout(() => URL.revokeObjectURL(url), 0);
-      }
-      return url;
-    })
-    .catch(() => {
-      // Don't cache failures, so a transient error doesn't hide the photo for the whole session.
-      if (photoCache.get(userId) === entry) photoCache.delete(userId);
-      return null;
-    });
-  photoCache.set(userId, entry);
-  while (photoCache.size > PHOTO_CACHE_LIMIT) {
-    const oldest = photoCache.keys().next().value as string;
-    forgetPhoto(oldest);
-  }
-  return entry;
-}
+export { clearPhotoCache, forgetPhoto, photoCacheSize } from "../utils/photoCache";
 
 export function Avatar({
   userId,
@@ -161,19 +107,15 @@ export function PageHeader({
   leading?: ReactNode;
 }) {
   return (
-    <div className="mb-5 animate-fade-up sm:mb-8">
-      <p className="section-rule mb-3 sm:mb-4" aria-hidden="true">
-        {`┌─ ${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
-      </p>
+    <div className="mb-5 sm:mb-8">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
         <div className="flex min-w-0 items-center gap-3">
           {leading}
           <div className="min-w-0">
             <h1 className="font-display text-3xl font-bold tracking-tight text-white sm:text-4xl">
               {title}
-              <span className="ascii-cursor text-brand-400" aria-hidden="true">_</span>
             </h1>
-            {subtitle && <p className="mt-1 text-sm text-neutral-400" style={{ fontFamily: "var(--font-mono)" }}>{subtitle}</p>}
+            {subtitle && <p className="mt-1 text-sm text-neutral-400">{subtitle}</p>}
           </div>
         </div>
         {actions && <div className="page-actions flex flex-wrap items-center gap-2">{actions}</div>}
@@ -209,7 +151,62 @@ export function StatCard({
       ) : (
         <p className={`mt-2 font-display text-6xl font-bold tabular-nums tracking-tight ${accent ? "text-brand-400" : "text-white"}`}>{shown}</p>
       )}
-      {hint && <p className="mt-1 text-xs text-neutral-500">{hint}</p>}
+      {hint && <p className="mt-1 text-xs text-neutral-400">{hint}</p>}
+    </div>
+  );
+}
+
+/** Icon-only button: a 40px hit area, an accessible name from `label`, and a tooltip. */
+export const IconButton = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLButtonElement> & { label: string; tone?: "default" | "danger" | "brand" }>(function IconButton(
+  { label, tone = "default", className = "", children, type = "button", ...rest },
+  ref
+) {
+  const hover = tone === "danger" ? "hover:bg-red-500/10 hover:text-red-300" : tone === "brand" ? "hover:bg-brand-500/10 hover:text-brand-300" : "hover:bg-white/10 hover:text-white";
+  return (
+    <button ref={ref} type={type} title={label} aria-label={label} className={`inline-grid h-10 w-10 place-items-center rounded-lg text-neutral-300 transition-colors disabled:opacity-50 ${hover} ${className}`} {...rest}>
+      {children}
+    </button>
+  );
+});
+
+/** A row of mutually exclusive choices (a filter, a date preset). `value` may be null when none of them is active. */
+export function Segmented<K extends string>({
+  options,
+  value,
+  onChange,
+  label,
+  className = "",
+}: {
+  options: { key: K; label: ReactNode }[];
+  value: K | null;
+  onChange: (key: K) => void;
+  label: string;
+  className?: string;
+}) {
+  return (
+    <div role="group" aria-label={label} className={`flex flex-wrap items-center gap-2 ${className}`}>
+      {options.map((o) => (
+        <button
+          key={o.key}
+          type="button"
+          aria-pressed={value === o.key}
+          onClick={() => onChange(o.key)}
+          className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors sm:py-1.5 ${value === o.key ? "bg-brand-500 text-black" : "bg-white/[0.04] text-neutral-300 hover:bg-white/[0.08]"}`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** An inline notice: a hairline-ruled strip with an icon. `tone` picks the colour; errors announce themselves (role="alert"). */
+export function Banner({ tone = "error", children, className = "" }: { tone?: "error" | "warn" | "info"; children: ReactNode; className?: string }) {
+  const cls = tone === "error" ? "border-red-500/60 text-red-300" : tone === "warn" ? "border-orange-400/60 text-orange-200" : "border-brand-500/50 text-brand-200";
+  return (
+    <div role={tone === "info" ? "status" : "alert"} className={`flex items-start gap-2 border-l-2 bg-white/[0.03] py-2.5 pl-3 pr-4 text-sm ${cls} ${className}`}>
+      <Icon name={tone === "info" ? "info" : "alert"} className="mt-0.5 h-4 w-4 shrink-0" />
+      <div className="min-w-0">{children}</div>
     </div>
   );
 }
@@ -226,7 +223,7 @@ export function EmptyState({ icon, title, message, action }: { icon: IconName; t
         <Icon name={icon} className="h-8 w-8" />
       </motion.span>
       <p className="font-semibold text-neutral-200">{title}</p>
-      {message && <p className="mt-1 max-w-sm text-sm text-neutral-500">{message}</p>}
+      {message && <p className="mt-1 max-w-sm text-sm text-neutral-400">{message}</p>}
       {action && <div className="mt-5">{action}</div>}
     </div>
   );
@@ -437,7 +434,7 @@ export function EventBadge({
   const overtime = session === "OT";
   return (
     <span className="inline-flex flex-wrap items-center justify-end gap-x-3 gap-y-0.5">
-      <span className={`tag ${type === "CLOCK_IN" ? (overtime ? "tag-info" : "tag-ok") : "tag-muted"}`}>
+      <span className={`tag ${type === "CLOCK_IN" ? "tag-in" : "tag-out"}`}>
         <Icon name={type === "CLOCK_IN" ? "login" : "logout"} className="h-3.5 w-3.5" strokeWidth={2.2} />
         {overtime ? "OT " : ""}
         {type === "CLOCK_IN" ? "Clock in" : "Clock out"}
@@ -469,7 +466,7 @@ export function Field({ label, children, hint, error }: { label: string; childre
     <label className="block">
       <span className="label">{label}</span>
       {children}
-      {error ? <span className="mt-1 block text-xs text-red-400">{error}</span> : hint && <span className="mt-1 block text-xs text-neutral-500">{hint}</span>}
+      {error ? <span className="mt-1 block text-xs text-red-400">{error}</span> : hint && <span className="mt-1 block text-xs text-neutral-400">{hint}</span>}
     </label>
   );
 }

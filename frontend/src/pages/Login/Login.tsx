@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { homeFor } from "../../components/AppShell";
 import Icon from "../../components/Icon";
-import { Spinner } from "../../components/ui";
+import { Banner, Spinner } from "../../components/ui";
 import type { ScanClock } from "../../components/fx/AsciiImage";
 import { ScanOverlay } from "../../components/fx/ScanOverlay";
 import api, { SessionPayload, errorMessage } from "../../services/api";
@@ -15,6 +15,16 @@ export default function Login() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const clock = useRef<ScanClock>({ born: 0 }); // one timeline for the logo and the form
+  // The ASCII scan intro plays once per browser session; signing in again later is not delayed by it.
+  const [intro] = useState(() => {
+    try {
+      if (sessionStorage.getItem("login-intro-seen")) return false;
+      sessionStorage.setItem("login-intro-seen", "1");
+    } catch {
+      /* storage blocked: just play it */
+    }
+    return true;
+  });
   const user = useAuthStore((s) => s.user);
   const kioskLocked = useAuthStore((s) => s.kioskLocked);
   const setSession = useAuthStore((s) => s.setSession);
@@ -97,21 +107,19 @@ export default function Login() {
           </label>
 
           {error && (
-            <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2.5 text-sm text-red-300 animate-fade-in">
-              <Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" />
-              {error}
-            </div>
+            <Banner tone="error" className="animate-fade-in">{error}</Banner>
           )}
 
           <button type="submit" disabled={loading} className="btn-primary w-full py-3.5 text-sm sm:text-[15px]">
             {loading ? <Spinner /> : <Icon name="login" className="h-4 w-4" />}
             {loading ? "Signing in..." : "Sign in"}
           </button>
+          <p className="text-center text-xs text-neutral-400">Forgot your password? Ask an administrator to reset it for you.</p>
         </form>
         </div>
       </main>
       {/* No card: on first load the whole page is ASCII, then one scan line turns it into the real sign-in. */}
-      <ScanOverlay clock={clock.current} tone="--color-paper" className="fixed inset-0" />
+      {intro && <ScanOverlay clock={clock.current} tone="--color-paper" className="fixed inset-0" />}
     </div>
   );
 }

@@ -64,7 +64,7 @@ export default function CameraView({
 }) {
   const showPicker = allowCameraSwitch && !!devices && devices.length > 1 && !!onSwitchCamera;
   return (
-    <div className={fill ? "absolute inset-0 overflow-hidden bg-black" : `relative w-full overflow-hidden rounded-2xl border border-white/10 bg-black ${aspect}`}>
+    <div data-theme="dark" className={fill ? "absolute inset-0 overflow-hidden bg-black" : `relative w-full overflow-hidden rounded-2xl border border-white/10 bg-black ${aspect}`}>
       {/* Mirrored so moving left moves left on screen, like a mirror */}
       <video ref={videoRef} autoPlay muted playsInline className={`h-full w-full -scale-x-100 object-cover transition-opacity duration-500 ${ready ? "opacity-100" : "opacity-0"}`} />
 
@@ -80,7 +80,7 @@ export default function CameraView({
               value={deviceId ?? ""}
               onChange={(e) => onSwitchCamera!(e.target.value)}
               aria-label="Choose camera"
-              className="rounded-full border border-white/10 bg-black/70 px-2.5 py-1 text-[11px] font-medium text-neutral-200"
+              className="rounded-full border border-white/10 bg-black/70 px-2.5 py-1 text-xs font-medium text-neutral-200"
               title="Choose camera"
             >
               {devices!.map((d, i) => (

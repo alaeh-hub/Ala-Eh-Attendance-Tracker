@@ -18,6 +18,8 @@ export default {
         ink: Object.fromEntries([950, 900, 850, 800, 750, 700, 600, 500].map((n) => [n, `rgb(var(--ch-ink-${n}) / <alpha-value>)`])),
         // Brand yellow, taken from the Ala Eh! logo
         brand: Object.fromEntries([50, 100, 200, 300, 400, 500, 600, 700, 800, 900].map((n) => [n, `rgb(var(--ch-brand-${n}) / <alpha-value>)`])),
+        // Neutral greys follow the theme (tokens.css): Tailwind's own scale in dark, an inverted one in light.
+        neutral: Object.fromEntries([50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950].map((n) => [n, `rgb(var(--ch-neutral-${n}) / <alpha-value>)`])),
         white: "rgb(var(--ch-white) / <alpha-value>)",
         black: "rgb(var(--ch-black) / <alpha-value>)",
       },

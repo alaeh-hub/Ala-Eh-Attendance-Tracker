@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useDiscardGuard } from "../../components/useDiscardGuard";
 import EmployeePicker, { PickedEmployee } from "../../components/admin/EmployeePicker";
 import { DateTimeField, Select } from "../../components/fields";
 import { Field, Modal, Spinner } from "../../components/ui";
@@ -13,6 +14,8 @@ export function ManualEntry({ onClose, onSaved }: { onClose: () => void; onSaved
   const [form, setForm] = useState(() => ({ event_type: "CLOCK_IN", session: "", timestamp: toDatetimeLocal(), notes: "" }));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const initialManual = useRef(JSON.stringify(form));
+  const { requestClose, dialog: discardDialog } = useDiscardGuard(!!employee || JSON.stringify(form) !== initialManual.current, onClose, saving);
 
   async function save() {
     if (saving) return;
@@ -42,11 +45,11 @@ export function ManualEntry({ onClose, onSaved }: { onClose: () => void; onSaved
   return (
     <Modal
       open
-      onClose={onClose}
+      onClose={requestClose}
       title="Manual attendance entry"
       footer={
         <>
-          <button className="btn-ghost" onClick={onClose} disabled={saving}>
+          <button className="btn-ghost" onClick={requestClose} disabled={saving}>
             Cancel
           </button>
           <button className="btn-primary" onClick={save} disabled={saving}>
@@ -88,6 +91,7 @@ export function ManualEntry({ onClose, onSaved }: { onClose: () => void; onSaved
           </p>
         )}
       </div>
+      {discardDialog}
     </Modal>
   );
 }
@@ -101,6 +105,7 @@ function CorrectEntry({ event, onClose, onSaved }: { event: EventRow; onClose: (
   const [form, setForm] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { requestClose, dialog: discardDialog } = useDiscardGuard(JSON.stringify(form) !== JSON.stringify(initial), onClose, saving);
 
   async function save() {
     if (saving) return;
@@ -135,11 +140,11 @@ function CorrectEntry({ event, onClose, onSaved }: { event: EventRow; onClose: (
   return (
     <Modal
       open
-      onClose={onClose}
+      onClose={requestClose}
       title="Correct attendance record"
       footer={
         <>
-          <button className="btn-ghost" onClick={onClose} disabled={saving}>
+          <button className="btn-ghost" onClick={requestClose} disabled={saving}>
             Cancel
           </button>
           <button className="btn-primary" onClick={save} disabled={saving}>
@@ -179,6 +184,7 @@ function CorrectEntry({ event, onClose, onSaved }: { event: EventRow; onClose: (
           </p>
         )}
       </div>
+      {discardDialog}
     </Modal>
   );
 }

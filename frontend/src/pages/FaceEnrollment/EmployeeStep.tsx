@@ -99,7 +99,7 @@ export default function EmployeeStep({ onReady }: { onReady: (u: User) => void }
   }
 
   return (
-    <div className="panel overflow-hidden animate-fade-up sm:min-h-[46rem]">
+    <div className="panel overflow-hidden sm:min-h-[46rem]">
       <div className="flex border-b border-white/[0.06]" role="tablist" aria-label="Employee">
         {(["new", "existing"] as const).map((m) => (
           <button
@@ -108,7 +108,7 @@ export default function EmployeeStep({ onReady }: { onReady: (u: User) => void }
             role="tab"
             aria-selected={mode === m}
             onClick={() => setMode(m)}
-            className={`relative flex-1 px-4 py-4 text-sm font-semibold transition-colors ${mode === m ? "text-white" : "text-neutral-500 hover:text-neutral-300"}`}
+            className={`relative flex-1 px-4 py-4 text-sm font-semibold transition-colors ${mode === m ? "text-white" : "text-neutral-400 hover:text-neutral-300"}`}
           >
             {m === "new" ? "New employee" : "Existing employee"}
             <span className={`absolute inset-x-6 bottom-0 h-0.5 rounded-full bg-brand-500 transition-transform duration-300 ${mode === m ? "scale-x-100" : "scale-x-0"}`} />
@@ -119,7 +119,7 @@ export default function EmployeeStep({ onReady }: { onReady: (u: User) => void }
       {mode === "new" ? (
         <form onSubmit={submit} className="p-4 sm:p-6" noValidate>
           <h3 className="mb-1 text-sm font-bold text-brand-400">Personal information</h3>
-          <p className="mb-5 text-sm text-neutral-500">Fields marked * are required.</p>
+          <p className="mb-5 text-sm text-neutral-400">Fields marked * are required.</p>
           <div className="grid gap-5 sm:grid-cols-2">
             <Field label="Full name *" error={errors.full_name}>
               <input className="input" value={form.full_name} onChange={set("full_name")} autoComplete="off" placeholder="Juan Dela Cruz" autoFocus />
@@ -191,7 +191,7 @@ export default function EmployeeStep({ onReady }: { onReady: (u: User) => void }
                 <span className="flex items-center gap-2 text-sm font-semibold text-white">
                   <Icon name="key" className="h-4 w-4 text-brand-400" /> {form.role === "KIOSK" ? "Device sign-in" : "Allow web sign-in"}
                 </span>
-                <span className="text-xs text-neutral-500">
+                <span className="text-xs text-neutral-400">
                   {form.role === "KIOSK"
                     ? "Required: the kiosk tablet signs in with this email and password. It can only run the attendance kiosk."
                     : form.role !== "STAFF"
@@ -231,7 +231,7 @@ export default function EmployeeStep({ onReady }: { onReady: (u: User) => void }
           <div className="max-h-[440px] space-y-1 overflow-y-auto" aria-busy={loadingUsers}>
             {loadingUsers && people.length === 0 && Array.from({ length: 4 }).map((_, i) => <div key={i} className="skeleton h-16 w-full rounded-xl" />)}
             {!loadingUsers && people.length === 0 && (
-              <p className="py-10 text-center text-sm text-neutral-500">{usersError ? "Couldn't load employees." : "No matching active employees."}</p>
+              <p className="py-10 text-center text-sm text-neutral-400">{usersError ? "Couldn't load employees." : "No matching active employees."}</p>
             )}
             {people.map((u) => (
               <button
@@ -243,18 +243,18 @@ export default function EmployeeStep({ onReady }: { onReady: (u: User) => void }
                 <Avatar userId={u.id} name={u.full_name} hasPhoto={u.has_photo} size="h-11 w-11" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-semibold text-white"><Highlight text={u.full_name} query={search} /></p>
-                  <p className="truncate text-xs text-neutral-500"><Highlight text={[u.employee_code, u.department, u.position].filter(Boolean).join(" · ") || u.email} query={search} /></p>
+                  <p className="truncate text-xs text-neutral-400"><Highlight text={[u.employee_code, u.department, u.position].filter(Boolean).join(" · ") || u.email} query={search} /></p>
                 </div>
                 {u.enrolled ? (
-                  <span className="tag tag-ok">{u.sample_count} samples</span>
+                  <span className="tag tag-dot tag-ok">{u.sample_count} samples</span>
                 ) : (
-                  <span className="tag tag-warn">Not enrolled</span>
+                  <span className="tag tag-dot tag-warn">Not enrolled</span>
                 )}
                 <Icon name="arrow_right" className="h-4 w-4 text-neutral-600 transition-transform group-hover:translate-x-0.5 group-hover:text-brand-400" />
               </button>
             ))}
             {total > users.length && (
-              <p className="px-3 py-2 text-xs text-neutral-500">
+              <p className="px-3 py-2 text-xs text-neutral-400">
                 Showing the first {users.length} of {total} — keep typing to narrow down.
               </p>
             )}

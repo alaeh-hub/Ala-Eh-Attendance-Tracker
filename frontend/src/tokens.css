@@ -4,6 +4,7 @@
   --text-display-s: 1.44rem; --text-display: 1.728rem; --text-section: 1.2rem; --text-title: 1rem; --text-lead: 1rem;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1); --ease-in: cubic-bezier(0.7, 0, 0.84, 0); --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   --dur-micro: 120ms; --dur-short: 220ms; --dur-long: 420ms;
+  --color-in: oklch(76% 0.15 155); --color-out: oklch(72% 0.15 255); /* the one clock-in / clock-out pair, used by the kiosk, badges and charts */
   --color-error: oklch(72% 0.17 27); --color-warn: oklch(78% 0.14 60); --color-info: oklch(78% 0.11 235); --color-success: oklch(76% 0.15 155);
   --container: 1440px; --gutter: 64px; --gap-columns: 32px; --section-gap-s: 120px; --section-gap: 144px; --section-gap-l: 176px;
   --z-base: 1; --z-raised: 10; --z-dropdown: 100; --z-sticky: 200; --z-sticky-nav: 300; --z-modal: 400; --z-toast: 500; --z-tooltip: 600;
@@ -38,12 +39,48 @@
   --ch-brand-50: 255 251 234; --ch-brand-100: 255 243 196; --ch-brand-200: 255 232 138; --ch-brand-300: 255 219 77; --ch-brand-400: 253 208 35;
   --ch-brand-500: 245 192 0; --ch-brand-600: 212 160 0; --ch-brand-700: 167 122 0; --ch-brand-800: 122 89 0; --ch-brand-900: 77 56 0;
   --ch-white: 255 255 255; --ch-black: 0 0 0;
+  --ch-neutral-50: 250 250 250; --ch-neutral-100: 245 245 245; --ch-neutral-200: 229 229 229; --ch-neutral-300: 212 212 212; --ch-neutral-400: 163 163 163; --ch-neutral-500: 115 115 115;
+  --ch-neutral-600: 82 82 82; --ch-neutral-700: 64 64 64; --ch-neutral-800: 38 38 38; --ch-neutral-900: 23 23 23; --ch-neutral-950: 10 10 10;
+  --chart-in: #3FCB8B; --chart-out: #6F8CF7;
 }
 
-/* Phones: one step down across the board. Small text stays >= 11px; headings and big numbers shrink the most. */
+/* An element can opt back into the dark palette (camera screens stay dark whatever the admin theme is). */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --color-paper: oklch(15% 0.006 85); --color-paper-2: oklch(18% 0.007 85); --color-paper-3: oklch(22% 0.008 85);
+  --color-ink: oklch(94% 0.008 90); --color-ink-2: oklch(80% 0.01 90); --color-muted: oklch(62% 0.012 90); --color-rule: oklch(30% 0.01 85);
+  --color-accent: oklch(84% 0.17 90); --color-accent-ink: oklch(18% 0.02 90); --color-focus: oklch(84% 0.17 90);
+  --color-in: oklch(76% 0.15 155); --color-out: oklch(72% 0.15 255);
+  --color-error: oklch(72% 0.17 27); --color-warn: oklch(78% 0.14 60); --color-info: oklch(78% 0.11 235); --color-success: oklch(76% 0.15 155);
+  --ch-ink-950: 14 13 11; --ch-ink-900: 18 17 15; --ch-ink-850: 23 22 19; --ch-ink-800: 28 27 23; --ch-ink-750: 35 33 28; --ch-ink-700: 44 42 36; --ch-ink-600: 60 57 49; --ch-ink-500: 84 80 69;
+  --ch-brand-200: 255 232 138; --ch-brand-300: 255 219 77; --ch-brand-400: 253 208 35;
+  --ch-white: 255 255 255;
+  --ch-neutral-50: 250 250 250; --ch-neutral-100: 245 245 245; --ch-neutral-200: 229 229 229; --ch-neutral-300: 212 212 212; --ch-neutral-400: 163 163 163; --ch-neutral-500: 115 115 115;
+  --ch-neutral-600: 82 82 82; --ch-neutral-700: 64 64 64; --ch-neutral-800: 38 38 38; --ch-neutral-900: 23 23 23; --ch-neutral-950: 10 10 10;
+  --chart-in: #3FCB8B; --chart-out: #6F8CF7;
+}
+
+/* Light theme (admin screens only; chosen from the account menu). Same warm hue, inverted lightness. Text colours are
+   darkened so everything stays above 4.5:1 on the light surfaces. */
+[data-theme="light"] {
+  color-scheme: light;
+  --color-paper: oklch(98% 0.005 90); --color-paper-2: oklch(100% 0 0); --color-paper-3: oklch(95% 0.008 90);
+  --color-ink: oklch(20% 0.01 85); --color-ink-2: oklch(34% 0.01 85); --color-muted: oklch(47% 0.012 90); --color-rule: oklch(87% 0.01 85);
+  --color-accent: oklch(55% 0.13 85); --color-accent-ink: oklch(99% 0 0); --color-focus: oklch(50% 0.14 85);
+  --color-in: oklch(46% 0.12 155); --color-out: oklch(46% 0.16 260);
+  --color-error: oklch(50% 0.19 27); --color-warn: oklch(50% 0.13 60); --color-info: oklch(47% 0.12 235); --color-success: oklch(45% 0.12 155);
+  --ch-ink-950: 250 248 243; --ch-ink-900: 244 241 234; --ch-ink-850: 255 255 255; --ch-ink-800: 236 233 225; --ch-ink-750: 228 224 214; --ch-ink-700: 214 210 199; --ch-ink-600: 190 185 172; --ch-ink-500: 150 145 130;
+  --ch-brand-200: 122 89 0; --ch-brand-300: 140 102 0; --ch-brand-400: 150 110 0;
+  --ch-white: 20 18 14;
+  --ch-neutral-50: 20 18 14; --ch-neutral-100: 23 21 17; --ch-neutral-200: 38 36 31; --ch-neutral-300: 64 60 52; --ch-neutral-400: 90 86 76; --ch-neutral-500: 110 106 96;
+  --ch-neutral-600: 150 146 136; --ch-neutral-700: 190 186 176; --ch-neutral-800: 220 217 208; --ch-neutral-900: 235 232 225; --ch-neutral-950: 245 243 237;
+  --chart-in: #12875A; --chart-out: #3B5BDB;
+}
+
+/* Phones: one step down across the board. Small text stays >= 12px; headings and big numbers shrink the most. */
 @media (max-width: 639.98px) {
   :root {
-    --fs-xs: 0.6875rem; --lh-xs: 1rem;
+    --fs-xs: 0.75rem; --lh-xs: 1rem;
     --fs-sm: 0.8125rem; --lh-sm: 1.15rem;
     --fs-base: 0.875rem; --lh-base: 1.35rem;
     --fs-lg: 1rem; --lh-lg: 1.5rem;
@@ -56,7 +93,7 @@
     --fs-7xl: 3rem; --lh-7xl: 1;
 
     /* The scaffold's own scale, used by body, labels and the ASCII sign-in. */
-    --text-xs: 0.6875rem; --text-sm: 0.8125rem; --text-md: 0.875rem; --text-lg: 1rem; --text-xl: 1.125rem; --text-2xl: 1.3rem; --text-3xl: 1.55rem;
+    --text-xs: 0.75rem; --text-sm: 0.8125rem; --text-md: 0.875rem; --text-lg: 1rem; --text-xl: 1.125rem; --text-2xl: 1.3rem; --text-3xl: 1.55rem;
     --topbar-h: 3.5rem;
   }
 }

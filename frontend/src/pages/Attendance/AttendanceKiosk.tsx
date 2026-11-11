@@ -336,9 +336,9 @@ export default function AttendanceKiosk() {
   const glass = "border border-white/10 bg-black/55";
   const hudBtn = `${glass} flex h-12 min-w-12 items-center justify-center gap-2 rounded-full px-4 text-base font-semibold text-white transition-colors hover:bg-black/75 active:scale-95`;
   const DIRECTIONS = [
-    { value: null, label: "Auto", on: "bg-brand-500 text-black" },
-    { value: "IN", label: "Time in", on: "bg-emerald-500 text-black" },
-    { value: "OUT", label: "Time out", on: "bg-orange-500 text-black" },
+    { value: null, label: "Auto", on: "bg-white text-black" },
+    { value: "IN", label: "Time in", on: "bg-[var(--color-in)] text-black" },
+    { value: "OUT", label: "Time out", on: "bg-[var(--color-out)] text-black" },
   ] as const;
   const SESSIONS = [
     { value: "AM", label: "Morning" },
@@ -346,8 +346,7 @@ export default function AttendanceKiosk() {
     { value: "OT", label: "Overtime" },
   ] as const;
   const seg = "min-w-0 flex-1 truncate rounded-xl font-bold transition-colors active:scale-95";
-  const startBtn =
-    "flex w-full items-center justify-center gap-3 rounded-2xl text-3xl font-extrabold transition-transform active:scale-[.97] h-24 sm:h-28 sm:text-4xl [@media(orientation:landscape)_and_(min-width:700px)]:h-full [@media(orientation:landscape)_and_(min-width:700px)]:flex-col [@media(orientation:landscape)_and_(min-width:700px)]:gap-2 [@media(max-height:520px)]:!h-full [@media(max-height:520px)]:!flex-row [@media(max-height:520px)]:!text-xl";
+  const startBtn = "kiosk-start";
 
   return (
     <div ref={containerRef} className="absolute inset-0 touch-manipulation select-none bg-black">
@@ -375,7 +374,7 @@ export default function AttendanceKiosk() {
             {/* Top bar: clock on the left, window controls on the right */}
             <div ref={topBarRef} className="absolute inset-x-0 top-0 flex items-start justify-between gap-3 px-[max(1rem,env(safe-area-inset-left))] pt-[max(1rem,env(safe-area-inset-top))] sm:px-6 sm:pt-6">
               <div className="flex min-w-0 items-center gap-3 sm:gap-4">
-                <img src="/logo.png" alt="Ala Eh! Food Products" className="h-12 w-12 shrink-0 rounded-full sm:h-16 sm:w-16 lg:h-20 lg:w-20 [@media(max-height:520px)]:!h-11 [@media(max-height:520px)]:!w-11" />
+                <img src="/logo.png" alt="Ala Eh! Food Products" className="kiosk-logo shrink-0 rounded-full" />
                 <LiveClock />
               </div>
               <div className="flex shrink-0 items-center gap-2">
@@ -399,26 +398,24 @@ export default function AttendanceKiosk() {
               </div>
             </div>
 
-            {/* Prompt while someone is being scanned */}
-            {prompt && showControls && (
-              <div className="pointer-events-none absolute inset-x-0 top-24 flex justify-center px-4 sm:top-28 [@media(max-height:520px)]:top-3 [@media(max-height:520px)]:px-[17rem]">
-                <span key={prompt} className={`${glass} whitespace-nowrap rounded-full px-6 py-2.5 text-center text-base font-semibold text-white animate-fade-up sm:text-xl [@media(max-height:520px)]:!px-4 [@media(max-height:520px)]:!py-1.5 [@media(max-height:520px)]:!text-sm`}>
+            {/* One status slot: the scan prompt, the offline notice and the error stack here in order, so they can never overlap. */}
+            <div className="kiosk-status">
+              {prompt && showControls && (
+                <span key={prompt} className={`${glass} kiosk-prompt whitespace-nowrap rounded-full px-6 py-2.5 text-center text-base font-semibold text-white animate-fade-up sm:text-xl`}>
                   {prompt}
                 </span>
-              </div>
-            )}
-
-            {!online && (
-              <div role="alert" className="absolute inset-x-4 top-24 z-10 mx-auto flex max-w-xl items-center gap-2 rounded-xl border border-orange-400/50 bg-black/85 px-4 py-3 text-sm font-semibold text-orange-200 sm:top-28">
-                <Icon name="alert" className="h-4 w-4 shrink-0" /> No network connection. Scanning is paused until it is back.
-              </div>
-            )}
-
-            {error && (
-              <div role="alert" className="absolute inset-x-4 top-36 mx-auto flex max-w-xl items-center gap-2 rounded-xl border border-red-500/40 bg-black/80 px-4 py-3 text-sm text-red-300">
-                <Icon name="alert" className="h-4 w-4 shrink-0" /> {error}
-              </div>
-            )}
+              )}
+              {!online && (
+                <div role="alert" className="kiosk-banner border-orange-400/50 bg-black/85 font-semibold text-orange-200">
+                  <Icon name="alert" className="h-4 w-4 shrink-0" /> No network connection. Scanning is paused until it is back.
+                </div>
+              )}
+              {error && (
+                <div role="alert" className="kiosk-banner border-red-500/40 bg-black/80 text-red-300">
+                  <Icon name="alert" className="h-4 w-4 shrink-0" /> {error}
+                </div>
+              )}
+            </div>
 
             {/* Recent check-ins, only where there is spare room beside the face window */}
             {recent.length > 0 && (
@@ -441,7 +438,7 @@ export default function AttendanceKiosk() {
               <div className="absolute inset-x-0 bottom-0 flex justify-center px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-6">
                 <div
                   ref={dockRef}
-                  className={`${glass} grid w-full max-w-3xl gap-3 rounded-3xl p-3 sm:p-4 [@media(orientation:landscape)_and_(min-width:700px)]:grid-cols-[1fr_36%] [@media(max-height:520px)]:grid-cols-[1fr_36%] [@media(max-height:520px)]:gap-2 [@media(max-height:520px)]:p-2`}
+                  className={`${glass} kiosk-dock w-full max-w-3xl rounded-3xl`}
                 >
                   <div className="flex min-w-0 flex-col gap-2">
                     <div className="flex gap-1 rounded-2xl bg-white/[0.06] p-1" role="group" aria-label="Time in or time out">
@@ -451,13 +448,13 @@ export default function AttendanceKiosk() {
                           onClick={() => (d.value ? pickDirection(d.value) : setDirection(null))}
                           aria-pressed={direction === d.value}
                           disabled={busy}
-                          className={`${seg} h-14 text-lg disabled:opacity-50 sm:h-16 sm:text-xl [@media(max-height:520px)]:!h-11 [@media(max-height:520px)]:!text-base ${direction === d.value ? d.on : "text-neutral-200 hover:bg-white/10"}`}
+                          className={`${seg} kiosk-dir disabled:opacity-50 ${direction === d.value ? d.on : "text-neutral-200 hover:bg-white/10"}`}
                         >
                           {d.label}
                         </button>
                       ))}
                     </div>
-                    <div className="flex h-11 items-center sm:h-12 [@media(max-height:520px)]:!h-9">
+                    <div className="kiosk-sessions flex items-center">
                       {direction ? (
                         <div className="flex h-full w-full gap-1 rounded-xl bg-white/[0.06] p-1" role="group" aria-label="Which part of the day">
                           {SESSIONS.map((o) => (
@@ -481,11 +478,11 @@ export default function AttendanceKiosk() {
                   {ready &&
                     (auto ? (
                       <button onClick={() => setAuto(false)} className={`${startBtn} border-2 border-red-400/60 bg-red-500/15 text-red-200 hover:bg-red-500/25`}>
-                        <Icon name="pause" className="h-9 w-9 sm:h-11 sm:w-11 [@media(max-height:520px)]:!h-6 [@media(max-height:520px)]:!w-6" strokeWidth={2.2} /> Stop
+                        <Icon name="pause" className="kiosk-start-icon" strokeWidth={2.2} /> Stop
                       </button>
                     ) : (
                       <button onClick={startScan} disabled={!online} className={`${startBtn} disabled:cursor-not-allowed disabled:opacity-50 bg-brand-500 text-black hover:bg-brand-400`}>
-                        <Icon name="scan" className="h-9 w-9 sm:h-11 sm:w-11 [@media(max-height:520px)]:!h-6 [@media(max-height:520px)]:!w-6" strokeWidth={2.2} /> Start scan
+                        <Icon name="scan" className="kiosk-start-icon" strokeWidth={2.2} /> Start scan
                       </button>
                     ))}
                 </div>

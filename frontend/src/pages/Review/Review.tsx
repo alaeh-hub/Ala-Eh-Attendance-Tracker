@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import EmployeePicker, { PickedEmployee } from "../../components/admin/EmployeePicker";
 import { isCancelled, useLatestRequest } from "../../components/admin/request";
 import Icon from "../../components/Icon";
-import { ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, timeAgo } from "../../components/ui";
+import { Banner, ConfirmDialog, Segmented, EmptyState, Modal, PageHeader, Spinner, timeAgo } from "../../components/ui";
 import api, { errorMessage } from "../../services/api";
 import { toast } from "../../stores/toastStore";
 import type { ScanSnapshot } from "../../types";
@@ -77,7 +77,7 @@ function SnapshotCard({
   const enrollable = actionable && snap.status !== "SPOOF_SUSPECTED";
   const who = snap.user_name ?? (snap.candidate_name ? `Closest: ${snap.candidate_name}` : "No close match");
   return (
-    <div className="panel overflow-hidden animate-fade-up">
+    <div className="panel overflow-hidden">
       <div className="relative aspect-[4/3] bg-black/60">
         {src ? (
           <img src={src} alt={`Scan snapshot, ${style.label.toLowerCase()}`} className="h-full w-full object-cover" />
@@ -86,12 +86,12 @@ function SnapshotCard({
             <Spinner className="h-6 w-6" />
           </div>
         )}
-        <span className={`tag tag-plate absolute left-2 top-2 ${style.cls}`}>{style.label}</span>
-        {snap.resolution && <span className="tag tag-plate tag-muted absolute right-2 top-2">{snap.resolution === "ADDED" ? "Added as sample" : "Dismissed"}</span>}
+        <span className={`tag tag-dot tag-plate absolute left-2 top-2 ${style.cls}`}>{style.label}</span>
+        {snap.resolution && <span className="tag tag-dot tag-plate tag-muted absolute right-2 top-2">{snap.resolution === "ADDED" ? "Added as sample" : "Dismissed"}</span>}
       </div>
       <div className="p-3">
         <p className="truncate text-sm font-semibold text-white">{who}</p>
-        <p className="mt-0.5 flex flex-wrap gap-x-3 text-xs tabular-nums text-neutral-500">
+        <p className="mt-0.5 flex flex-wrap gap-x-3 text-xs tabular-nums text-neutral-400">
           <time dateTime={snap.created_at} title={formatDateTime(snap.created_at)}>
             {timeAgo(snap.created_at)}
           </time>
@@ -114,7 +114,7 @@ function SnapshotCard({
             </>
           )}
           <button
-            className="rounded-lg p-2 text-neutral-500 transition-colors hover:bg-red-500/10 hover:text-red-300 disabled:opacity-50"
+            className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-red-500/10 hover:text-red-300 disabled:opacity-50"
             onClick={onDelete}
             disabled={busy}
             title="Delete snapshot"
@@ -189,15 +189,15 @@ function EnrollModal({ snap, onClose, onDone }: { snap: ScanSnapshot; onClose: (
         }}
       />
       {needsConsent && (
-        <p role="alert" className="mt-3 rounded-xl border border-orange-400/30 bg-orange-500/10 px-4 py-2.5 text-sm text-orange-200">
+        <Banner tone="warn" className="mt-3">
           No biometric consent is on file for this employee. Confirm they agreed to face recognition to continue.
-        </p>
+        </Banner>
       )}
       {refused && (
-        <p role="alert" className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm text-red-300">
+        <Banner tone="error" className="mt-3">
           <b className="block text-red-200">Not added — the server refused this frame.</b>
           {refused}
-        </p>
+        </Banner>
       )}
     </Modal>
   );
@@ -212,6 +212,7 @@ export default function Review() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [enrolling, setEnrolling] = useState<ScanSnapshot | null>(null);
   const [deleting, setDeleting] = useState<ScanSnapshot | null>(null);
+  const [dismissing, setDismissing] = useState<ScanSnapshot | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [busyIds, setBusyIds] = useState<Set<string>>(() => new Set());
   // Synchronous mirror of busyIds: a double click lands before React re-renders the disabled button.
@@ -329,20 +330,21 @@ export default function Review() {
         }
       />
 
-      <div className="mb-4 flex flex-wrap gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-1 sm:inline-flex" role="group" aria-label="Filter">
-        {FILTERS.map((f) => (
-          <button
-            key={f.key}
-            type="button"
-            aria-pressed={filter === f.key}
-            onClick={() => setFilter(f.key)}
-            className={`rounded-lg px-3.5 py-1.5 text-sm font-semibold transition-colors ${filter === f.key ? "bg-brand-500 text-black" : "text-neutral-400 hover:text-white"}`}
-          >
-            {f.label}
-            {f.key === "pending" && pending > 0 && <span className="ml-1.5 rounded-full bg-black/25 px-1.5 text-xs tabular-nums">{pending}</span>}
-          </button>
-        ))}
-      </div>
+      <Segmented
+        className="mb-4"
+        label="Filter"
+        options={FILTERS.map((f) => ({
+          key: f.key,
+          label: (
+            <>
+              {f.label}
+              {f.key === "pending" && pending > 0 && <span className="ml-1.5 rounded-full bg-black/25 px-1.5 text-xs tabular-nums">{pending}</span>}
+            </>
+          ),
+        }))}
+        value={filter}
+        onChange={setFilter}
+      />
 
       {loading && items.length === 0 ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -363,13 +365,13 @@ export default function Review() {
                 snap={s}
                 busy={busyIds.has(s.id)}
                 onEnroll={() => setEnrolling(s)}
-                onDismiss={() => dismiss(s)}
+                onDismiss={() => setDismissing(s)}
                 onDelete={() => setDeleting(s)}
               />
             ))}
           </div>
           <div className="mt-4 flex flex-col items-center gap-2">
-            <p className="text-xs text-neutral-500" aria-live="polite">
+            <p className="text-xs text-neutral-400" aria-live="polite">
               Showing {items.length} of {total}
             </p>
             {total > items.length && (
@@ -391,6 +393,18 @@ export default function Review() {
           }}
         />
       )}
+      <ConfirmDialog
+        open={!!dismissing}
+        title="Dismiss this scan?"
+        confirmLabel="Dismiss"
+        message="It will be marked as reviewed and leave the pending list. Nobody is added or clocked in. You can still delete the snapshot later."
+        onConfirm={() => {
+          const s = dismissing;
+          setDismissing(null);
+          if (s) void dismiss(s);
+        }}
+        onClose={() => setDismissing(null)}
+      />
       <ConfirmDialog
         open={!!deleting}
         title="Delete snapshot?"

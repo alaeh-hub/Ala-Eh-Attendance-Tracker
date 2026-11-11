@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useDiscardGuard } from "../../components/useDiscardGuard";
 import { TimeField } from "../../components/fields";
 import Icon from "../../components/Icon";
-import { Field, Modal, Spinner } from "../../components/ui";
+import { Banner, Field, Modal, Spinner } from "../../components/ui";
 import api, { errorMessage } from "../../services/api";
 import { toast } from "../../stores/toastStore";
 import type { Department, Shift } from "../../types";
@@ -34,6 +35,7 @@ export default function DepartmentForm({ department, onClose, onSaved }: { depar
         }
       : EMPTY_FORM
   );
+  const initialForm = useRef(JSON.stringify(form));
   const [shiftDraft, setShiftDraft] = useState({ name: "", start_time: "08:00", end_time: "17:00" });
   const [roleDraft, setRoleDraft] = useState("");
   const [saving, setSaving] = useState(false);
@@ -101,6 +103,9 @@ export default function DepartmentForm({ department, onClose, onSaved }: { depar
     });
   }
 
+  const dirty = JSON.stringify(form) !== initialForm.current || roleDraft.trim() !== "" || shiftDraft.name.trim() !== "";
+  const { requestClose, dialog: discardDialog } = useDiscardGuard(dirty, onClose, saving);
+
   async function save() {
     if (saving) return;
     setError(null);
@@ -152,11 +157,11 @@ export default function DepartmentForm({ department, onClose, onSaved }: { depar
     <Modal
       open
       wide
-      onClose={onClose}
+      onClose={requestClose}
       title={department ? "Edit department" : "Add department"}
       footer={
         <>
-          <button className="btn-ghost" onClick={onClose} disabled={saving}>
+          <button className="btn-ghost" onClick={requestClose} disabled={saving}>
             Cancel
           </button>
           <button className="btn-primary" onClick={save} disabled={saving}>
@@ -180,7 +185,7 @@ export default function DepartmentForm({ department, onClose, onSaved }: { depar
             />
             <span>
               <span className="text-sm font-semibold text-white">This department works in shifts</span>
-              <span className="block text-xs text-neutral-500">Turn on if staff rotate across different hours (e.g. morning / night shift).</span>
+              <span className="block text-xs text-neutral-400">Turn on if staff rotate across different hours (e.g. morning / night shift).</span>
             </span>
           </label>
 
@@ -209,7 +214,7 @@ export default function DepartmentForm({ department, onClose, onSaved }: { depar
                         {s.start_time} – {s.end_time}
                         <NextDay start={s.start_time} end={s.end_time} />
                       </span>
-                      <button type="button" onClick={() => removeShift(i)} className="rounded-lg p-1 text-neutral-500 hover:bg-red-500/10 hover:text-red-300" aria-label={`Remove shift ${s.name}`}>
+                      <button type="button" onClick={() => removeShift(i)} className="rounded-lg p-1 text-neutral-400 hover:bg-red-500/10 hover:text-red-300" aria-label={`Remove shift ${s.name}`}>
                         <Icon name="close" className="h-4 w-4" />
                       </button>
                     </li>
@@ -230,7 +235,7 @@ export default function DepartmentForm({ department, onClose, onSaved }: { depar
                   <Icon name="plus" className="h-4 w-4" /> Add
                 </button>
               </div>
-              <p className="mt-2 text-xs text-neutral-500">
+              <p className="mt-2 text-xs text-neutral-400">
                 {isOvernight(shiftDraft.start_time, shiftDraft.end_time) ? (
                   <span className="text-indigo-200">This shift ends the next day (overnight).</span>
                 ) : (
@@ -248,7 +253,7 @@ export default function DepartmentForm({ department, onClose, onSaved }: { depar
 
         <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5">
           <p className="text-sm font-semibold text-white">Lunch break</p>
-          <p className="mb-4 text-xs text-neutral-500">
+          <p className="mb-4 text-xs text-neutral-400">
             Not counted as worked time. An employee can time out for lunch and back in, or stay scanned straight through — either way this window is excluded automatically.
             {!form.has_shifting && (
               <>
@@ -282,7 +287,7 @@ export default function DepartmentForm({ department, onClose, onSaved }: { depar
               {form.roles.map((r) => (
                 <span key={r} className="token">
                   {r}
-                  <button type="button" onClick={() => removeRole(r)} className="ml-1 text-neutral-500 hover:text-red-300" aria-label={`Remove ${r}`}>
+                  <button type="button" onClick={() => removeRole(r)} className="ml-1 text-neutral-400 hover:text-red-300" aria-label={`Remove ${r}`}>
                     <Icon name="close" className="h-3 w-3" />
                   </button>
                 </span>
@@ -311,10 +316,9 @@ export default function DepartmentForm({ department, onClose, onSaved }: { depar
       </div>
 
       {error && (
-        <p role="alert" className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm text-red-300">
-          {error}
-        </p>
+        <Banner tone="error" className="mt-4">{error}</Banner>
       )}
+      {discardDialog}
     </Modal>
   );
 }

@@ -1,4 +1,5 @@
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Constellation } from "./fx/Constellation";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { animate as animeAnimate, stagger } from "animejs";
 import { motion } from "motion/react";
@@ -7,9 +8,11 @@ import { usePageChoreography } from "../hooks/usePageChoreography";
 import { EASE_OUT, motionOK } from "../lib/motion";
 import api from "../services/api";
 import { useAuthStore } from "../stores/authStore";
+import { useThemeStore } from "../stores/themeStore";
 import type { Role } from "../types";
 import Icon, { IconName } from "./Icon";
 import IdleScreen from "./IdleScreen";
+import { useLogoutConfirm } from "./LogoutConfirm";
 import { Avatar, RoleBadge } from "./ui";
 import { SpotlightNav } from "./fx/SpotlightNav";
 import { UnderlineLink } from "./fx/UnderlineLink";
@@ -27,7 +30,7 @@ interface NavItem {
 
 export const NAV: NavItem[] = [
   { to: "/admin", label: "Dashboard", icon: "dashboard", roles: ["ADMIN", "OPERATOR"], end: true },
-  { to: "/admin/reports", label: "Reports", icon: "clock", roles: ["ADMIN"] },
+  { to: "/admin/reports", label: "Reports", icon: "chart", roles: ["ADMIN"] },
   { to: "/admin/employees", label: "Employees", icon: "users", roles: ["ADMIN"] },
   { to: "/admin/enroll", label: "Enroll", icon: "enroll", roles: ["ADMIN"] },
   { to: "/admin/departments", label: "Departments", icon: "building", roles: ["ADMIN"] },
@@ -46,11 +49,11 @@ function Brand({ compact = false }: { compact?: boolean }) {
     <Link to={homeFor(user?.role)} className="flex items-center gap-2.5 rounded-lg transition-opacity hover:opacity-90 sm:gap-3">
       <img src="/logo.png" alt="Ala Eh! Food Products" className="h-9 w-9 shrink-0 rounded-full sm:h-11 sm:w-11" />
       {!compact && (
-        <div className="leading-tight">
+        <div className="brand-word leading-tight">
           <p className="font-display text-base font-bold tracking-tight text-white">
             Ala Eh<span className="text-brand-400">!</span>
           </p>
-          <p className="text-[11px] font-medium text-neutral-500">{user?.role === "STAFF" ? "Attendance" : "Admin portal"}</p>
+          <p className="text-xs font-medium text-neutral-400">{user?.role === "STAFF" ? "Attendance" : "Admin portal"}</p>
         </div>
       )}
     </Link>
@@ -110,7 +113,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
           <Icon name={item.icon} className="h-[18px] w-[18px]" />
           {item.label === "Records" && user?.role === "STAFF" ? "My attendance" : item.label}
           {item.to === "/admin/review" && pendingReview > 0 && (
-            <span className="ml-auto rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-bold tabular-nums text-white">{pendingReview > 99 ? "99+" : pendingReview}</span>
+            <span className="nav-badge ml-auto" aria-label={`${pendingReview} pending`}>{pendingReview > 99 ? "99+" : pendingReview}</span>
           )}
         </NavLink>
       ))}
@@ -129,19 +132,21 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 function UserCard({ compact = false }: { compact?: boolean }) {
-  const { user, logout } = useAuthStore();
+  const user = useAuthStore((s) => s.user);
+  const { ask, dialog } = useLogoutConfirm();
   if (!user) return null;
   if (compact)
     return (
       <div className="flex items-center gap-2.5">
+        {dialog}
         <Avatar userId={user.id} name={user.full_name} hasPhoto={user.has_photo} />
         <div className="hidden min-w-0 leading-tight 2xl:block">
           <p className="max-w-[140px] truncate text-sm font-semibold text-white">{user.full_name}</p>
           <RoleBadge role={user.role} />
         </div>
         <button
-          onClick={() => void logout()}
-          className="rounded-lg p-2 text-neutral-500 transition-colors duration-200 hover:bg-red-500/10 hover:text-red-300 active:scale-[.92]"
+          onClick={ask}
+          className="rounded-lg p-2 text-neutral-400 transition-colors duration-200 hover:bg-red-500/10 hover:text-red-300 active:scale-[.92]"
           title="Log out"
           aria-label="Log out"
         >
@@ -150,7 +155,8 @@ function UserCard({ compact = false }: { compact?: boolean }) {
       </div>
     );
   return (
-    <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-3 transition-colors duration-200 hover:border-white/10">
+    <div className="border-t border-[var(--color-rule)] pt-3">
+      {dialog}
       <div className="flex items-center gap-3">
         <Avatar userId={user.id} name={user.full_name} hasPhoto={user.has_photo} />
         <div className="min-w-0 flex-1">
@@ -158,8 +164,8 @@ function UserCard({ compact = false }: { compact?: boolean }) {
           <RoleBadge role={user.role} />
         </div>
         <button
-          onClick={() => void logout()}
-          className="rounded-lg p-2 text-neutral-500 transition-colors duration-200 hover:bg-red-500/10 hover:text-red-300 active:scale-[.92]"
+          onClick={ask}
+          className="rounded-lg p-2 text-neutral-400 transition-colors duration-200 hover:bg-red-500/10 hover:text-red-300 active:scale-[.92]"
           title="Log out"
           aria-label="Log out"
         >
@@ -172,7 +178,8 @@ function UserCard({ compact = false }: { compact?: boolean }) {
 
 /** Avatar button with the account's details, the date and time, the kiosk shortcut and sign-out in one popover. */
 function AccountMenu() {
-  const { user, logout } = useAuthStore();
+  const user = useAuthStore((s) => s.user);
+  const { ask, dialog } = useLogoutConfirm();
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
   const location = useLocation();
@@ -195,6 +202,7 @@ function AccountMenu() {
   if (!user) return null;
   return (
     <div ref={wrap} className="relative">
+      {dialog}
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -222,18 +230,30 @@ function AccountMenu() {
             <Clock />
           </div>
           <div className="flex flex-col gap-1">
+            <ThemeToggle />
             {user.role !== "STAFF" && (
               <Link role="menuitem" to="/kiosk" className="menu-item">
                 <Icon name="scan" className="h-[18px] w-[18px]" /> Open kiosk
               </Link>
             )}
-            <button role="menuitem" type="button" onClick={() => void logout()} className="menu-item hover:!text-red-300" title="Log out" aria-label="Log out">
+            <button role="menuitem" type="button" onClick={() => { setOpen(false); ask(); }} className="menu-item hover:!text-red-300" title="Log out" aria-label="Log out">
               <Icon name="logout" className="h-[18px] w-[18px]" /> Sign out
             </button>
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+function ThemeToggle({ className = "menu-item" }: { className?: string }) {
+  const theme = useThemeStore((s) => s.theme);
+  const toggle = useThemeStore((s) => s.toggle);
+  return (
+    <button type="button" role="menuitem" className={className} onClick={toggle} aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}>
+      <Icon name={theme === "dark" ? "sun" : "moon"} className="h-[18px] w-[18px]" />
+      {theme === "dark" ? "Light theme" : "Dark theme"}
+    </button>
   );
 }
 
@@ -246,13 +266,13 @@ function Clock({ compact = false }: { compact?: boolean }) {
   }, []);
   if (compact)
     return (
-      <div className="hidden text-right text-xs leading-tight text-neutral-500 xl:block">
+      <div className="hidden text-right text-xs leading-tight text-neutral-400 xl:block">
         <p className="font-semibold text-neutral-300">{formatDate(now, { weekday: "short", month: "short", day: "numeric" })}</p>
         <p className="tabular-nums">{formatTime(now.toISOString())}</p>
       </div>
     );
   return (
-    <div className="px-1 text-xs text-neutral-500">
+    <div className="px-1 text-xs text-neutral-400">
       <p className="font-semibold text-neutral-300">{formatDate(now, { weekday: "long", month: "long", day: "numeric" })}</p>
       <p>{formatTime(now.toISOString())}</p>
     </div>
@@ -289,7 +309,8 @@ function MobileDrawer({ onClose }: { onClose: () => void }) {
           onComplete: () => items.forEach((e) => ((e.style.opacity = ""), (e.style.transform = ""))),
         })
       : null;
-    const key = (e: KeyboardEvent) => e.key === "Escape" && closeRef.current();
+    // A dialog opened from the drawer (sign-out) takes Escape first.
+    const key = (e: KeyboardEvent) => e.key === "Escape" && document.querySelectorAll('[role="dialog"][aria-modal="true"]').length <= 1 && closeRef.current();
     document.addEventListener("keydown", key);
     return () => {
       intro?.pause();
@@ -339,7 +360,8 @@ function MobileDrawer({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <NavLinks onNavigate={close} />
-        <div className="mt-auto" data-drawer-foot>
+        <div className="mt-auto space-y-2" data-drawer-foot>
+          <ThemeToggle className="menu-item border border-ink-600" />
           <UserCard />
         </div>
       </motion.aside>
@@ -354,6 +376,21 @@ export default function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => setOpen(false), [location.pathname]);
   const mainRef = useRef<HTMLElement>(null);
   usePageChoreography(mainRef, location.pathname);
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const on = () => setScrolled(window.scrollY > 24);
+    on();
+    window.addEventListener("scroll", on, { passive: true });
+    return () => window.removeEventListener("scroll", on);
+  }, []);
+  // Admin screens can be light; the attribute is removed again on leaving so the kiosk and sign-in stay dark.
+  const theme = useThemeStore((s) => s.theme);
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    return () => {
+      delete document.documentElement.dataset.theme;
+    };
+  }, [theme]);
   const finishLeavingKiosk = useAuthStore((s) => s.finishLeavingKiosk);
   useEffect(() => finishLeavingKiosk(), [finishLeavingKiosk]);
 
@@ -365,14 +402,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-dvh">
+      {/* Ambient background: animated on the dashboard only, a still frame elsewhere; skipped on the kiosk (busy with the camera). */}
+      {location.pathname !== "/kiosk" && <Constellation key={theme} className="fixed inset-0 -z-10" animated={location.pathname === "/admin"} />}
       {showIdleScreen && <IdleScreen />}
       {/* Desktop top bar: brand and spotlight nav on the left, the account menu on the right */}
-      <header className="topbar hidden lg:block">
-        <div className="mx-auto flex h-[68px] w-full max-w-[var(--shell-max)] items-center gap-6 px-8">
+      <header className="dock-wrap hidden lg:block" data-scrolled={scrolled ? "1" : "0"}>
+        <div className="dock mx-auto flex w-fit max-w-[calc(100%-2rem)] items-center gap-3 xl:max-w-[calc(100%-4rem)] xl:gap-6">
           <Brand />
-          <div className="flex min-w-0 flex-1 justify-start self-stretch pl-2">
-            <TopNav />
-          </div>
+          <span className="dock-sep" aria-hidden="true" />
+          <TopNav />
+          <span className="dock-sep" aria-hidden="true" />
           <AccountMenu />
         </div>
       </header>
@@ -396,9 +435,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
       <motion.main
         ref={mainRef}
         key={location.pathname}
-        initial={motionOK() ? { opacity: 0, y: 10 } : false}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.38, ease: EASE_OUT }}
+        initial={motionOK() ? { opacity: 0 } : false}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.2, ease: EASE_OUT }}
         className="mx-auto w-full min-w-0 max-w-[var(--shell-max)] overflow-x-clip px-[max(1rem,env(safe-area-inset-left))] pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-5 sm:px-6 sm:pt-6 lg:px-8 lg:pb-10 lg:pt-10"
       >
         {children}

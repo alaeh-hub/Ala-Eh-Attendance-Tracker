@@ -7,7 +7,7 @@ export function TimeWithDay({ iso, workDate }: { iso: string | null; workDate: s
   return (
     <>
       {formatTime(iso)}
-      {day !== workDate && <span className="ml-1 text-[11px] text-sky-300">({formatDate(day, { month: "short", day: "numeric" })})</span>}
+      {day !== workDate && <span className="ml-1 text-xs text-sky-300">({formatDate(day, { month: "short", day: "numeric" })})</span>}
     </>
   );
 }

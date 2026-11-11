@@ -4,7 +4,9 @@ import Pager from "../../components/admin/Pager";
 import { AnyRole, ROLE_HELP } from "../../components/admin/roles";
 import ClearAllDataDialog, { ClearAllResult } from "../../components/ClearAllDataDialog";
 import Icon from "../../components/Icon";
-import { Avatar, ConfirmDialog, EmptyState, Field, Modal, PageHeader, RoleBadge, Spinner, forgetPhoto } from "../../components/ui";
+import { useDiscardGuard } from "../../components/useDiscardGuard";
+import RowMenu from "../../components/admin/RowMenu";
+import { Avatar, Banner, ConfirmDialog, EmptyState, Field, IconButton, Modal, PageHeader, RoleBadge, Spinner, forgetPhoto } from "../../components/ui";
 import api, { errorMessage } from "../../services/api";
 import { useAuthStore } from "../../stores/authStore";
 import { toast } from "../../stores/toastStore";
@@ -132,20 +134,13 @@ export default function Employees() {
         title="Employees"
         subtitle={`${counts.total} people · ${counts.active} active · ${counts.enrolled} face-enrolled`}
         actions={
-          <div className="flex gap-2">
-            {me?.role === "ADMIN" && (
-              <button className="btn-ghost text-red-300 hover:text-red-200" onClick={() => setConfirmClearAll(true)}>
-                <Icon name="trash" className="h-4 w-4" /> Clear all data
-              </button>
-            )}
-            <Link to="/admin/enroll" className="btn-primary">
-              <Icon name="plus" className="h-4 w-4" /> Add employee
-            </Link>
-          </div>
+          <Link to="/admin/enroll" className="btn-primary">
+            <Icon name="plus" className="h-4 w-4" /> Add employee
+          </Link>
         }
       />
 
-      <div className="bar mb-4 flex flex-col gap-3 sm:flex-row sm:items-center animate-fade-up">
+      <div className="bar mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
         <SearchInput className="flex-1" placeholder="Search name, ID, email, position…" aria-label="Search employees" value={search} onValueChange={setSearch} note={`${filtered.length} of ${users.length}`} />
         <Select className="input sm:w-48" value={department} onChange={(e) => setDepartment(e.target.value)} aria-label="Department">
           <option value="">All departments</option>
@@ -161,16 +156,16 @@ export default function Employees() {
         </Select>
       </div>
 
-      <div className="panel overflow-hidden animate-fade-up" style={{ animationDelay: "80ms" }}>
+      <div className="panel overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="rtable w-full min-w-[950px] table-fixed text-sm">
+          <table className="rtable w-full min-w-[880px] table-fixed text-sm">
             <colgroup>
               <col className="w-[270px]" />
               <col className="w-[120px]" />
               <col className="w-[90px]" />
               <col className="w-[150px]" />
               <col className="w-[110px]" />
-              <col className="w-[210px]" />
+              <col className="w-[150px]" />
             </colgroup>
             <thead className="border-b border-white/[0.06] bg-white/[0.02]">
               <tr>
@@ -193,15 +188,22 @@ export default function Employees() {
                 ))}
               {!loading &&
                 visible.map((u) => (
-                  <tr key={u.id} className={`transition-colors hover:bg-white/[0.02] ${u.is_active ? "" : "opacity-60"}`}>
+                  <tr
+                    key={u.id}
+                    className={`cursor-pointer transition-colors hover:bg-white/[0.02] ${u.is_active ? "" : "opacity-60"}`}
+                    onClick={(e) => {
+                      // The whole row opens the editor; buttons and links inside it keep their own meaning.
+                      if (!(e.target as HTMLElement).closest("a, button, [role=menu]")) setEditing(u);
+                    }}
+                  >
                     <td className="table-cell cell-primary">
                       <div className="flex items-center gap-3">
                         <Avatar userId={u.id} name={u.full_name} hasPhoto={u.has_photo} size="h-10 w-10" />
                         <div className="min-w-0">
                           <p className="truncate font-semibold text-white">
-                            <Highlight text={u.full_name} query={q} /> {u.id === me?.id && <span className="text-xs font-normal text-neutral-500">(you)</span>}
+                            <Highlight text={u.full_name} query={q} /> {u.id === me?.id && <span className="text-xs font-normal text-neutral-400">(you)</span>}
                           </p>
-                          <p className="truncate text-xs text-neutral-500">
+                          <p className="truncate text-xs text-neutral-400">
                             <span className="font-mono text-neutral-400">{u.employee_code ? <Highlight text={u.employee_code} query={q} /> : "—"}</span> · {u.email}
                           </p>
                         </div>
@@ -209,14 +211,14 @@ export default function Employees() {
                     </td>
                     <td data-label="Department" className="table-cell">
                       <p className="truncate text-neutral-200">{u.department ? <Highlight text={u.department} query={q} /> : "—"}</p>
-                      <p className="truncate text-xs text-neutral-500">{u.position || ""}</p>
+                      <p className="truncate text-xs text-neutral-400">{u.position || ""}</p>
                     </td>
                     <td data-label="Role" className="table-cell">
                       <RoleBadge role={u.role} />
                     </td>
                     <td data-label="Face" className="table-cell">
                       {u.role === "KIOSK" ? (
-                        <span className="tag tag-muted" title="Kiosk device accounts don't have a face.">
+                        <span className="tag tag-dot tag-muted" title="Kiosk device accounts don't have a face.">
                           Device account
                         </span>
                       ) : u.enrolled ? (
@@ -224,50 +226,50 @@ export default function Employees() {
                           <Icon name="check" className="h-3.5 w-3.5" strokeWidth={2.4} /> {u.sample_count} samples
                         </span>
                       ) : (
-                        <Link to={`/enroll?user=${u.id}`} className="tag tag-warn hover:underline">
+                        <Link to={`/admin/enroll?user=${u.id}`} className="tag tag-dot tag-warn hover:underline">
                           Not enrolled — enroll
                         </Link>
                       )}
                     </td>
                     <td data-label="Status" className="table-cell">
-                      <span className={`tag ${u.is_active ? "tag-ok" : "tag-muted"}`}>
+                      <span className={`tag tag-dot ${u.is_active ? "tag-ok" : "tag-muted"}`}>
                         {u.is_active ? "Active" : "Deactivated"}
                       </span>
                     </td>
                     <td className="table-cell cell-actions">
-                      <div className="flex justify-end gap-1">
+                      <div className="flex items-center justify-end gap-1">
                         {u.role !== "KIOSK" && (
                           <Link
-                            to={`/enroll?user=${u.id}`}
-                            className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-brand-500/10 hover:text-brand-300"
+                            to={`/admin/enroll?user=${u.id}`}
+                            className="inline-grid h-10 w-10 place-items-center rounded-lg text-neutral-300 transition-colors hover:bg-brand-500/10 hover:text-brand-300"
                             title="Face enrollment"
                             aria-label={`Face enrollment for ${u.full_name}`}
                           >
                             <Icon name="scan" className="h-4 w-4" />
                           </Link>
                         )}
-                        <button onClick={() => setEditing(u)} className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-white/10 hover:text-white" title="Edit" aria-label={`Edit ${u.full_name}`}>
+                        <IconButton onClick={() => setEditing(u)} label={`Edit ${u.full_name}`}>
                           <Icon name="edit" className="h-4 w-4" />
-                        </button>
+                        </IconButton>
                         {u.id !== me?.id && (
-                          <>
-                            <button
-                              onClick={() => (u.is_active ? setConfirm({ user: u, action: "deactivate" }) : setActive(u, true))}
-                              disabled={busy}
-                              className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-neutral-400 transition-colors hover:bg-white/10 hover:text-white"
-                              aria-label={`${u.is_active ? "Deactivate" : "Reactivate"} ${u.full_name}`}
-                            >
-                              {u.is_active ? "Deactivate" : "Reactivate"}
-                            </button>
-                            <button
-                              onClick={() => setConfirm({ user: u, action: "delete" })}
-                              className="rounded-lg p-2 text-neutral-500 transition-colors hover:bg-red-500/10 hover:text-red-300"
-                              title="Delete"
-                              aria-label={`Delete ${u.full_name}`}
-                            >
-                              <Icon name="trash" className="h-4 w-4" />
-                            </button>
-                          </>
+                          <RowMenu
+                            label={`More actions for ${u.full_name}`}
+                            items={[
+                              {
+                                label: u.is_active ? "Deactivate" : "Reactivate",
+                                ariaLabel: `${u.is_active ? "Deactivate" : "Reactivate"} ${u.full_name}`,
+                                disabled: busy,
+                                onSelect: () => (u.is_active ? setConfirm({ user: u, action: "deactivate" }) : setActive(u, true)),
+                              },
+                              {
+                                label: "Delete…",
+                                ariaLabel: `Delete ${u.full_name}`,
+                                danger: true,
+                                icon: <Icon name="trash" className="h-4 w-4" />,
+                                onSelect: () => setConfirm({ user: u, action: "delete" }),
+                              },
+                            ]}
+                          />
                         )}
                       </div>
                     </td>
@@ -286,6 +288,18 @@ export default function Employees() {
         )}
         {!loading && <Pager offset={offset} pageSize={PAGE_SIZE} shown={visible.length} total={filtered.length} noun="employees" onChange={(o) => setPage({ key: filterKey, offset: o })} />}
       </div>
+
+      {me?.role === "ADMIN" && (
+        <section className="mt-10 border-t border-red-500/30 pt-5" aria-labelledby="danger-zone">
+          <h2 id="danger-zone" className="text-sm font-semibold text-red-300">Danger zone</h2>
+          <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="max-w-xl text-sm text-neutral-400">Remove every employee, attendance record and face sample from this system. This cannot be undone.</p>
+            <button className="btn-danger shrink-0" onClick={() => setConfirmClearAll(true)}>
+              <Icon name="trash" className="h-4 w-4" /> Clear all data
+            </button>
+          </div>
+        </section>
+      )}
 
       {editing && <EditEmployee user={editing} isSelf={editing.id === me?.id} departments={deptList} onClose={() => setEditing(null)} onSaved={(u) => { replace(u); setEditing(null); }} />}
 
@@ -336,6 +350,37 @@ function EditEmployee({ user, isSelf, departments, onClose, onSaved }: { user: U
   const [error, setError] = useState<string | null>(null);
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const selectedDept = departments.find((d) => d.name === form.department);
+  const [pending, setPending] = useState<{ extra: Record<string, unknown>; title: string; confirmLabel: string; lines: string[] } | null>(null);
+  const dirty =
+    form.password !== "" ||
+    form.full_name !== user.full_name ||
+    form.employee_code !== (user.employee_code ?? "") ||
+    form.email !== user.email ||
+    form.phone !== (user.phone ?? "") ||
+    form.department !== (user.department ?? "") ||
+    form.position !== (user.position ?? "") ||
+    form.role !== user.role;
+  const { requestClose, dialog: discardDialog } = useDiscardGuard(dirty, onClose, saving);
+
+  /** Why this form can't be saved yet, or null. Checked before anything is confirmed or sent. */
+  function problemWith(extra: Record<string, unknown>) {
+    if (form.password && (form.password.length < 8 || form.password.length > 72)) return "The password must be 8–72 characters.";
+    const roleNeedsPassword = form.role !== "STAFF" && form.role !== user.role && !user.can_login && !form.password;
+    if (roleNeedsPassword && !extra.revoke_login) return form.role === "KIOSK" ? "A kiosk device account needs a password to sign in on the tablet." : "Set a password: this role must be able to sign in.";
+    return null;
+  }
+
+  /** Role, password and sign-in changes are security-sensitive: they are listed and confirmed before they are sent. */
+  function review(extra: Record<string, unknown> = {}) {
+    const problem = problemWith(extra);
+    if (problem) return setError(problem);
+    const lines: string[] = [];
+    if (!isSelf && form.role !== user.role) lines.push(`Role: ${user.role.toLowerCase()} → ${form.role.toLowerCase()}${form.role === "ADMIN" ? " (full admin access)" : ""}`);
+    if (form.password) lines.push("Set a new password (their current one stops working)");
+    if (extra.revoke_login) lines.push("Remove their web sign-in (they can still use the kiosk)");
+    if (lines.length === 0) return void save(extra);
+    setPending({ extra, lines, title: extra.revoke_login ? "Revoke web sign-in?" : "Confirm sensitive changes", confirmLabel: extra.revoke_login ? "Revoke sign-in" : "Apply changes" });
+  }
 
   async function save(extra: Record<string, unknown> = {}) {
     if (saving) return;
@@ -355,18 +400,12 @@ function EditEmployee({ user, isSelf, departments, onClose, onSaved }: { user: U
       if (next !== v) payload[k] = next;
     }
     if (isSelf) delete payload.role;
-    if (form.password) {
-      if (form.password.length < 8 || form.password.length > 72) {
-        setError("The password must be 8–72 characters.");
-        return;
-      }
-      payload.password = form.password;
-    }
-    const roleNeedsPassword = form.role !== "STAFF" && form.role !== user.role && !user.can_login && !form.password;
-    if (roleNeedsPassword && !extra.revoke_login) {
-      setError(form.role === "KIOSK" ? "A kiosk device account needs a password to sign in on the tablet." : "Set a password: this role must be able to sign in.");
+    const problem = problemWith(extra);
+    if (problem) {
+      setError(problem);
       return;
     }
+    if (form.password) payload.password = form.password;
     Object.assign(payload, extra);
     if (Object.keys(payload).length === 0) {
       onClose();
@@ -389,14 +428,14 @@ function EditEmployee({ user, isSelf, departments, onClose, onSaved }: { user: U
     <Modal
       open
       wide
-      onClose={onClose}
+      onClose={requestClose}
       title="Edit employee"
       footer={
         <>
-          <button className="btn-ghost" onClick={onClose} disabled={saving}>
+          <button className="btn-ghost" onClick={requestClose} disabled={saving}>
             Cancel
           </button>
-          <button className="btn-primary" onClick={() => save()} disabled={saving}>
+          <button className="btn-primary" onClick={() => review()} disabled={saving}>
             {saving && <Spinner />} Save changes
           </button>
         </>
@@ -406,7 +445,7 @@ function EditEmployee({ user, isSelf, departments, onClose, onSaved }: { user: U
         <Avatar userId={user.id} name={user.full_name} hasPhoto={user.has_photo} size="h-12 w-12" />
         <div>
           <p className="font-semibold text-white">{user.full_name}</p>
-          <p className="text-xs text-neutral-500">
+          <p className="text-xs text-neutral-400">
             {user.role === "KIOSK" ? "Kiosk device account — runs the attendance kiosk only" : user.can_login ? "Can sign in to the web app" : "Kiosk only — no web sign-in"}
           </p>
         </div>
@@ -472,15 +511,35 @@ function EditEmployee({ user, isSelf, departments, onClose, onSaved }: { user: U
         </Field>
       </div>
       {user.can_login && !isSelf && user.role === "STAFF" && (
-        <button className="mt-4 text-xs font-semibold text-red-300 hover:text-red-200" onClick={() => save({ revoke_login: true })} disabled={saving}>
+        <button className="mt-4 text-xs font-semibold text-red-300 hover:text-red-200" onClick={() => review({ revoke_login: true })} disabled={saving}>
           Revoke web sign-in
         </button>
       )}
       {error && (
-        <p role="alert" className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm text-red-300">
-          {error}
-        </p>
+        <Banner tone="error" className="mt-4">{error}</Banner>
       )}
+      {discardDialog}
+      <ConfirmDialog
+        open={!!pending}
+        title={pending?.title ?? ""}
+        confirmLabel={pending?.confirmLabel}
+        danger={!!pending?.extra.revoke_login}
+        busy={saving}
+        message={
+          <>
+            <p>
+              For <b className="text-white">{user.full_name}</b>:
+            </p>
+            <ul className="mt-2 list-disc space-y-1 pl-5">{pending?.lines.map((l) => <li key={l}>{l}</li>)}</ul>
+          </>
+        }
+        onClose={() => !saving && setPending(null)}
+        onConfirm={async () => {
+          const extra = pending?.extra ?? {};
+          await save(extra);
+          setPending(null);
+        }}
+      />
     </Modal>
   );
 }

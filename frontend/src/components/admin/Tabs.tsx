@@ -36,7 +36,7 @@ export default function Tabs<K extends string>({
   }
 
   return (
-    <div role="tablist" aria-label={label} className={`mb-4 flex gap-6 border-b border-ink-700 sm:w-fit animate-fade-up ${className}`}>
+    <div role="tablist" aria-label={label} className={`mb-4 flex gap-6 border-b border-ink-700 sm:w-fit ${className}`}>
       {tabs.map((t, i) => {
         const selected = t.key === value;
         return (

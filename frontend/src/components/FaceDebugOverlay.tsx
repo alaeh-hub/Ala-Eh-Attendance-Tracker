@@ -166,13 +166,13 @@ export default function FaceDebugOverlay({ debug, kind }: { debug: FaceDebugCont
 
       {/* Under the screen's own banner (the pose card / the prompt pill), so it never covers it. */}
       <div
-        className={`pointer-events-none absolute left-2 z-[5] w-52 max-w-[46vw] font-mono text-[10px] leading-4 text-white/90 [@media(max-height:520px)]:top-16 ${
+        className={`pointer-events-none absolute left-2 z-[5] w-52 max-w-[46vw] font-mono text-xs leading-4 text-white/90 [@media(max-height:520px)]:top-16 ${
           kind === "enroll" ? "top-[13.5rem] sm:top-[14.5rem]" : "top-[10rem] sm:top-[10.75rem]"
         }`}
       >
         <div className="pointer-events-auto flex items-center justify-between gap-2 rounded-t-lg border border-white/10 bg-black/70 px-2 py-1">
           <span className="font-bold text-cyan-300">Debug · {kind === "enroll" ? "enroll" : "scan"}</span>
-          <button type="button" onClick={toggle} aria-pressed={on} className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold hover:bg-white/20">
+          <button type="button" onClick={toggle} aria-pressed={on} className="rounded bg-white/10 px-1.5 py-0.5 text-xs font-semibold hover:bg-white/20">
             {on ? "Hide" : "Show"}
           </button>
         </div>

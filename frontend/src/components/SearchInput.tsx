@@ -31,7 +31,7 @@ const SearchInput = forwardRef<HTMLInputElement, Props>(function SearchInput({ v
   };
   return (
     <div className={`relative ${className}`}>
-      <Icon name="search" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
+      <Icon name="search" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
       <input
         {...rest}
         ref={ref}
@@ -47,12 +47,12 @@ const SearchInput = forwardRef<HTMLInputElement, Props>(function SearchInput({ v
         onKeyDown={onKeyDown}
       />
       <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-1">
-        {note && value && <span className="hidden whitespace-nowrap pr-1 text-[11px] tabular-nums text-neutral-500 sm:inline">{note}</span>}
+        {note && value && <span className="hidden whitespace-nowrap pr-1 text-xs tabular-nums text-neutral-400 sm:inline">{note}</span>}
         {trailing}
         {value && (
           <button
             type="button"
-            className="grid h-8 w-8 place-items-center rounded-lg text-neutral-500 transition-colors hover:bg-white/10 hover:text-white active:bg-white/10"
+            className="grid h-8 w-8 place-items-center rounded-lg text-neutral-400 transition-colors hover:bg-white/10 hover:text-white active:bg-white/10"
             aria-label="Clear search"
             onClick={() => {
               onValueChange("");

@@ -4,7 +4,7 @@ import Pager from "../../components/admin/Pager";
 import Tabs, { tabPanelProps } from "../../components/admin/Tabs";
 import { cleanParams, isCancelled, totalCount, useLatestRequest } from "../../components/admin/request";
 import Icon from "../../components/Icon";
-import { EmptyState, PageHeader, Spinner, StatCard } from "../../components/ui";
+import { EmptyState, PageHeader, Spinner, StatCard, Segmented } from "../../components/ui";
 import api, { downloadFile, errorMessage } from "../../services/api";
 import { toast } from "../../stores/toastStore";
 import type { TodayReport } from "../../types";
@@ -221,22 +221,12 @@ export default function Reports() {
 
       {tab === "hours" ? (
         <div {...tabPanelProps("reports", "hours")}>
-          <div className="bar mb-4 space-y-3 animate-fade-up">
+          <div className="bar mb-4 space-y-3">
             <div className="flex flex-wrap items-center gap-2">
-              {PRESETS.map((p) => (
-                <button
-                  key={p.key}
-                  type="button"
-                  aria-pressed={activePreset === p.key}
-                  onClick={() => setRange(preset(p.key))}
-                  className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors sm:py-1.5 ${activePreset === p.key ? "bg-brand-500 text-black" : "bg-white/[0.04] text-neutral-300 hover:bg-white/[0.08]"}`}
-                >
-                  {p.label}
-                </button>
-              ))}
+              <Segmented<(typeof PRESETS)[number]["key"]> label="Date range" options={PRESETS.map((p) => ({ key: p.key, label: p.label }))} value={activePreset ?? null} onChange={(k) => setRange(preset(k))} />
               <div className="flex w-full items-center gap-2 sm:w-auto">
                 <DateField className="input min-w-0 flex-1 py-1.5 sm:w-auto sm:flex-none" value={from} max={to} onChange={(e) => e.target.value && setRange([e.target.value, to])} aria-label="From date" />
-                <span className="text-neutral-500" aria-hidden="true">→</span>
+                <span className="text-neutral-400" aria-hidden="true">→</span>
                 <DateField className="input min-w-0 flex-1 py-1.5 sm:w-auto sm:flex-none" value={to} min={from} onChange={(e) => e.target.value && setRange([from, e.target.value])} aria-label="To date" />
               </div>
             </div>
@@ -251,7 +241,7 @@ export default function Reports() {
             </div>
           </div>
 
-          <div className="mb-4 grid grid-cols-2 gap-3 animate-fade-up sm:grid-cols-4">
+          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
             {[
               ["Employees", String(totals.employees)],
               ["Regular hours", hoursLabel(totals.hours)],
@@ -259,13 +249,13 @@ export default function Reports() {
               ["Total hours", hoursLabel(totals.total)],
             ].map(([k, v]) => (
               <div key={k} className="stat">
-                <p className="text-[11px] font-semibold text-neutral-500">{k}</p>
+                <p className="text-xs font-semibold text-neutral-400">{k}</p>
                 <p className="mt-0.5 text-lg font-extrabold tabular-nums text-white sm:text-xl">{loading ? "—" : v}</p>
               </div>
             ))}
           </div>
 
-          <div className="panel overflow-hidden animate-fade-up">
+          <div className="panel overflow-hidden">
             <div className="overflow-x-auto">
               <table className="rtable w-full min-w-[760px] text-sm">
                 <thead className="border-b border-white/[0.06] bg-white/[0.02]">
@@ -297,7 +287,7 @@ export default function Reports() {
                       <tr key={r.user_id} className="hover:bg-white/[0.02]">
                         <td className="table-cell cell-primary">
                           <p className="font-semibold text-white"><Highlight text={r.user_name} query={q} /></p>
-                          <p className="text-xs text-neutral-500">{[r.employee_code, r.department].filter(Boolean).join(" · ")}</p>
+                          <p className="text-xs text-neutral-400">{[r.employee_code, r.department].filter(Boolean).join(" · ")}</p>
                         </td>
                         <td data-label="Days" className="table-cell tabular-nums text-neutral-300">{r.days_worked}</td>
                         <td data-label="Regular" className="table-cell tabular-nums text-neutral-200">{hoursLabel(r.hours)}</td>
@@ -308,7 +298,7 @@ export default function Reports() {
                           <button
                             onClick={() => exportPdf(r.user_id)}
                             disabled={exporting !== null}
-                            className="rounded-lg p-2 text-neutral-500 hover:bg-white/[0.06] hover:text-white"
+                            className="rounded-lg p-2 text-neutral-400 hover:bg-white/[0.06] hover:text-white"
                             title={`Download PDF for ${r.user_name}`}
                             aria-label={`Download hours PDF for ${r.user_name}`}
                           >
@@ -326,7 +316,7 @@ export default function Reports() {
         </div>
       ) : (
         <div {...tabPanelProps("reports", "audit")}>
-          <div className="bar mb-4 flex flex-wrap items-end gap-2 animate-fade-up">
+          <div className="bar mb-4 flex flex-wrap items-end gap-2">
             <label className="block min-w-[9rem] flex-1 sm:flex-none">
               <span className="label">From</span>
               <DateField className="input w-full py-1.5 sm:w-auto" value={auditFilter.from} max={auditFilter.to || undefined} onChange={(e) => setAuditFilter((f) => ({ ...f, from: e.target.value }))} />
@@ -356,7 +346,7 @@ export default function Reports() {
               </button>
             )}
           </div>
-          <div className="panel overflow-hidden animate-fade-up">
+          <div className="panel overflow-hidden">
           <div className="overflow-x-auto">
             <table className="rtable w-full min-w-[640px] text-sm">
               <thead className="border-b border-white/[0.06] bg-white/[0.02]">
@@ -374,7 +364,7 @@ export default function Reports() {
                       <td data-label="When" className="table-cell whitespace-nowrap tabular-nums text-neutral-400">{auditWhen(a.created_at)}</td>
                       <td data-label="Who" className="table-cell text-white">{a.actor_name ?? "System"}</td>
                       <td data-label="Action" className="table-cell cell-full cell-wrap font-mono text-xs text-neutral-300">{a.action}</td>
-                      <td data-label="Details" className={`table-cell cell-full cell-wrap max-w-[320px] truncate text-xs text-neutral-500 ${a.details ? "" : "max-lg:hidden"}`} title={a.details ?? ""}>{a.details ?? ""}</td>
+                      <td data-label="Details" className={`table-cell cell-full cell-wrap max-w-[320px] truncate text-xs text-neutral-400 ${a.details ? "" : "max-lg:hidden"}`} title={a.details ?? ""}>{a.details ?? ""}</td>
                     </tr>
                   ))}
               </tbody>

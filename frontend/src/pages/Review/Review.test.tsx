@@ -57,6 +57,10 @@ describe("Review page", () => {
     post.mockResolvedValue({ data: { ok: true, pending_count: 0 } });
     render(<Review />);
     await userEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
+    // Dismissing asks first; nothing is sent until it is confirmed.
+    expect(post).not.toHaveBeenCalled();
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Dismiss" }));
     expect(post).toHaveBeenCalledWith("/review/snapshots/snap-1/dismiss");
   });
 
@@ -135,8 +139,9 @@ describe("Review page", () => {
     let resolve: (v: unknown) => void = () => undefined;
     post.mockImplementation(() => new Promise((r) => (resolve = r)));
     render(<Review />);
-    const btn = await screen.findByRole("button", { name: "Dismiss" });
-    await userEvent.dblClick(btn);
+    await userEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.dblClick(within(dialog).getByRole("button", { name: "Dismiss" }));
     expect(post).toHaveBeenCalledTimes(1);
     resolve({ data: { ok: true, pending_count: 0 } });
     await waitFor(() => expect(screen.getByText("Nothing to review")).toBeInTheDocument());

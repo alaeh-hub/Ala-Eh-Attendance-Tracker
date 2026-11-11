@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { animate } from "motion";
 import { AsciiImage } from "./fx/AsciiImage";
+import { Constellation } from "./fx/Constellation";
 import { motionOK } from "../lib/motion";
 import { formatDate, formatTime, orgNow, orgParts, useOrgStore } from "../utils/orgTime";
 
@@ -59,16 +60,18 @@ export default function IdleScreen({
   return (
     <div
       className="ascii-crt is-revealed idle-screen fixed inset-0 z-[800] flex flex-col items-center justify-center overflow-hidden animate-fade-in"
-      style={{ filter: dim ? "brightness(0.55)" : undefined }}
+      style={{ filter: dim ? "brightness(0.78)" : undefined }}
       role="status"
       aria-label={`Idle. ${hint}.`}
     >
+      {/* Livelier than the in-app background: nothing competes with it here. Sits under the scan lines, over the paper. */}
+      <Constellation className="absolute inset-0 z-[1]" intensity={3.5} />
       <div ref={setDrift} className="relative z-[3] flex w-full flex-col items-center px-6 text-center">
         <div className="w-[min(34vh,300px)]">
           <AsciiImage src="/logo.png" cols={64} label="Ala Eh! Food Products" className="ascii-glow" />
         </div>
 
-        <p className="idle-mono mt-8 text-sm text-neutral-400 sm:text-base">
+        <p className="idle-mono mt-8 text-lg uppercase tracking-[0.2em] text-neutral-200 sm:text-2xl">
           {variant === "kiosk" ? "Attendance kiosk" : greet(orgParts(now).hour)}
         </p>
 
@@ -82,20 +85,21 @@ export default function IdleScreen({
             :
           </span>
           <span>{mm}</span>
-          {period && <span className="idle-mono ml-4 text-[0.22em] font-medium text-neutral-400">{period}</span>}
+          {period && <span className="idle-mono ml-4 text-[0.22em] font-medium text-neutral-200">{period}</span>}
         </p>
 
-        <p className="idle-mono mt-5 text-base text-neutral-300 sm:text-xl">
+        <p className="idle-mono mt-6 text-xl text-neutral-100 sm:text-3xl">
           {formatDate(now, { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
         </p>
 
-        <p className="idle-mono mt-14 text-sm text-neutral-400 sm:text-lg">
-          {hint}
-          <span className="ascii-cursor text-brand-400" aria-hidden="true">
-            _
+        <p className="idle-mono mt-14 inline-flex items-center gap-4 rounded-full border border-brand-400/60 bg-black/40 px-7 py-4 text-xl font-medium text-white shadow-[0_0_32px_-8px_var(--color-accent)] sm:text-3xl">
+          <span className="relative flex h-3.5 w-3.5" aria-hidden="true">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-400 opacity-70" />
+            <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-brand-400" />
           </span>
+          {hint}
         </p>
-        {variant === "admin" && <p className="idle-mono mt-2 text-xs text-neutral-500">Locked for privacy</p>}
+        {variant === "admin" && <p className="idle-mono mt-5 text-base text-neutral-300">Locked for privacy</p>}
       </div>
     </div>
   );

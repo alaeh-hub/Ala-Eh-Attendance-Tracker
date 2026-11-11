@@ -45,6 +45,12 @@ function RequireAuth({ roles, kiosk, children }: { roles?: Role[]; kiosk?: boole
   );
 }
 
+/** Old addresses forward to their /admin home and keep the query string (e.g. /enroll?user=<id>). */
+function LegacyRedirect({ to }: { to: string }) {
+  const { search, hash } = useLocation();
+  return <Navigate to={{ pathname: to, search, hash }} replace />;
+}
+
 function HomeRedirect() {
   const user = useAuthStore((s) => s.user);
   const kioskLocked = useAuthStore((s) => s.kioskLocked);
@@ -137,10 +143,10 @@ export default function App() {
         <Route path="/admin/review" element={<RequireAuth roles={["ADMIN"]}><Review /></RequireAuth>} />
         <Route path="/records" element={<RequireAuth roles={["ADMIN", "OPERATOR", "STAFF"]}><Records /></RequireAuth>} />
         {/* Old addresses keep working. */}
-        <Route path="/employees" element={<Navigate to="/admin/employees" replace />} />
-        <Route path="/enroll" element={<Navigate to="/admin/enroll" replace />} />
-        <Route path="/departments" element={<Navigate to="/admin/departments" replace />} />
-        <Route path="/review" element={<Navigate to="/admin/review" replace />} />
+        <Route path="/employees" element={<LegacyRedirect to="/admin/employees" />} />
+        <Route path="/enroll" element={<LegacyRedirect to="/admin/enroll" />} />
+        <Route path="/departments" element={<LegacyRedirect to="/admin/departments" />} />
+        <Route path="/review" element={<LegacyRedirect to="/admin/review" />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       <Toaster />
